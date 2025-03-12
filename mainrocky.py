@@ -49,7 +49,7 @@ def relocalization(frame, keyframes, factor_graph, retrieval_database):
                 kf_idx,
                 config["reloc"]["min_match_frac"],
                 is_reloc=config["reloc"]["strict"],
-            ):
+            ): # Relocalization Successful!
                 retrieval_database.update(
                     frame,
                     add_after_query=True,
@@ -152,15 +152,17 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset", default="datasets/tum/rgbd_dataset_freiburg1_desk")
+    parser.add_argument("--dataset2", default="")
     parser.add_argument("--config", default="config/base.yaml")
     parser.add_argument("--save-as", default="default")
     parser.add_argument("--no-viz", action="store_true")
     parser.add_argument("--calib", default="")
+    parser.add_argument("--debug", default="False")
+
     
-
-
+    
     args = parser.parse_args()
-
+    debug = args.debug == "True" or args.debug.lower() == "true"
     load_config(args.config)
     print(args.dataset)
     print(config)
@@ -234,7 +236,57 @@ if __name__ == "__main__":
 
     frames = []
 
+    if debug:
+        dataset2 = load_dataset(args.dataset2)
+        has_calib2 = dataset2.has_calib()
+        use_calib2 = config["use_calib"]
+        if use_calib2 and not has_calib2:
+            print("[Warning] No calibration provided for the second dataset!")
+            sys.exit(0)
+        K2 = None
+        if use_calib2:
+            K2 = torch.from_numpy(dataset2.camera_intrinsics.K_frame).to(
+                device, dtype=torch.float32
+            )
+            keyframes.set_intrinsics(K2)
+
+        if dataset2.save_results:
+            save_dir2, seq_name2 = eval.prepare_savedir(args, dataset2)
+            traj_file2 = save_dir2 / f"{seq_name2}.txt"
+            recon_file2 = save_dir2 / f"{seq_name2}.ply"
+            if traj_file2.exists():
+                traj_file2.unlink()
+            if recon_file2.exists():
+                recon_file2.unlink()
+        has_calib2 = dataset2.has_calib()
+        use_calib2 = config["use_calib"]
+
+        if use_calib2 and not has_calib2:
+            print("[Warning] No calibration provided for the second dataset!")
+            sys.exit(0)
+        K2 = None
+        if use_calib2:
+            K2 = torch.from_numpy(dataset2.camera_intrinsics.K_frame).to(
+                device, dtype=torch.float32
+            )
+            keyframes.set_intrinsics(K2)
+
+        if dataset2.save_results:
+            save_dir2, seq_name2 = eval.prepare_savedir(args, dataset2)
+            traj_file2 = save_dir2 / f"{seq_name2}.txt"
+            recon_file2 = save_dir2 / f"{seq_name2}.ply"
+            if traj_file2.exists():
+                traj_file2.unlink()
+            if recon_file2.exists():
+                recon_file2.unlink()
+                
+
+
     while True:
+        # The following variables are shared memory:
+        # - keyframes: SharedKeyframes object that stores keyframe data
+        # - states: SharedStates object that manages shared states and synchronization
+        
         mode = states.get_mode()
         msg = try_get_msg(viz2main)
         last_msg = msg if msg is not None else last_msg
@@ -254,7 +306,10 @@ if __name__ == "__main__":
             states.set_mode(Mode.TERMINATED)
             break
 
-        timestamp, img = dataset[i]
+        _, img = dataset[i]
+        timestamp, img2 = dataset2[i]
+        second_cam = timestamp > 10
+
         if save_frames:
             frames.append(img)
 
@@ -265,15 +320,27 @@ if __name__ == "__main__":
             else states.get_frame().T_WC
         )
         frame = create_frame(i, img, T_WC, img_size=dataset.img_size, device=device)
+        
+        if second_cam:
+            T_WC2 = (
+                lietorch.Sim3.Identity(1, device=device)
+                if i == 0
+                else states.get_frame().T_WC
+            )
+            frame2 = create_frame(i, img2, T_WC2, img_size=dataset2.img_size, device=device)
 
         if mode == Mode.INIT:
-            # Initialize via mono inference, and encoded features neeed for database
+            # Initialize via mono inference, and encoded features needed for database
             X_init, C_init = mast3r_inference_mono(model, frame)
             frame.update_pointmap(X_init, C_init)
             keyframes.append(frame)
             states.queue_global_optimization(len(keyframes) - 1)
             states.set_mode(Mode.TRACKING)
             states.set_frame(frame)
+            if second_cam:
+                X_init2, C_init2 = mast3r_inference_mono(model, frame2)
+                frame2.update_pointmap(X_init2, C_init2)
+                keyframes.append(frame2)
             i += 1
             continue
 
@@ -282,13 +349,23 @@ if __name__ == "__main__":
             if try_reloc:
                 states.set_mode(Mode.RELOC)
             states.set_frame(frame)
+            if second_cam:
+                add_new_kf2, match_info2, try_reloc2 = tracker.track(frame2)
+                if try_reloc2:
+                    states.set_mode(Mode.RELOC)
+                states.set_frame(frame2)
 
         elif mode == Mode.RELOC:
             X, C = mast3r_inference_mono(model, frame)
             frame.update_pointmap(X, C)
             states.set_frame(frame)
             states.queue_reloc()
-            # In single threaded mode, make sure relocalization happen for every frame
+            if second_cam:
+                X2, C2 = mast3r_inference_mono(model, frame2)
+                frame2.update_pointmap(X2, C2)
+                states.set_frame(frame2)
+                states.queue_reloc()
+            # In single threaded mode, make sure relocalization happens for every frame
             while config["single_thread"]:
                 with states.lock:
                     if states.reloc_sem.value == 0:
@@ -301,6 +378,9 @@ if __name__ == "__main__":
         if add_new_kf:
             keyframes.append(frame)
             states.queue_global_optimization(len(keyframes) - 1)
+            if second_cam and add_new_kf2:
+                keyframes.append(frame2)
+                states.queue_global_optimization(len(keyframes) - 1)
             # In single threaded mode, wait for the backend to finish
             while config["single_thread"]:
                 with states.lock:

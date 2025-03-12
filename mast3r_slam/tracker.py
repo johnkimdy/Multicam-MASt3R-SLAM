@@ -64,7 +64,7 @@ class FrameTracker:
         valid_opt = valid_match_k & valid_Cf & valid_Ck & valid_Q
         valid_kf = valid_match_k & valid_Q
 
-        match_frac = valid_opt.sum() / valid_opt.numel()
+        match_frac = valid_opt.sum() / valid_opt.numel() # if match % is low, no match, try reloc
         if match_frac < self.cfg["min_match_frac"]:
             print(f"Skipped frame {frame.frame_id}")
             return False, [], True
@@ -92,7 +92,7 @@ class FrameTracker:
             print(f"Cholesky failed {frame.frame_id}")
             return False, [], True
 
-        frame.T_WC = T_WCf
+        frame.T_WC = T_WCf # what is T_WC? John
 
         # Use pose to transform points to update keyframe
         Xkk = T_CkCf.act(Xkf)
@@ -109,7 +109,7 @@ class FrameTracker:
 
         new_kf = min(match_frac_k, unique_frac_f) < self.cfg["match_frac_thresh"]
 
-        # Rest idx if new keyframe
+        # Reset idx if new keyframe
         if new_kf:
             self.reset_idx_f2k()
 

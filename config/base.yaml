@@ -54,5 +54,12 @@ retrieval:
   min_thresh: 5e-3
 
 reloc:
-  min_match_frac: 0.3
+  min_match_frac: 0.3 # might need to increase this
   strict: True
+
+stream_ip:
+  iphone_ip: "http://143.248.162.187:4747/video"
+  android_ip: "http://143.248.163.21:8080/video"
+  rtmp_ip : "rtmp://pc104709.iptime.org:1935/live"
+  key : "video"
+# rtmp://pc104709.iptime.org:1935/live/YourKeyHere

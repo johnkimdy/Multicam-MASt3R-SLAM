@@ -49,7 +49,7 @@ def relocalization(frame, keyframes, factor_graph, retrieval_database):
                 kf_idx,
                 config["reloc"]["min_match_frac"],
                 is_reloc=config["reloc"]["strict"],
-            ):
+            ): # Relocalization Successful!
                 retrieval_database.update(
                     frame,
                     add_after_query=True,
@@ -70,7 +70,7 @@ def relocalization(frame, keyframes, factor_graph, retrieval_database):
                 factor_graph.solve_GN_rays()
         return successful_loop_closure
 
-
+# add key frame to retrival database
 def run_backend(cfg, model, states, keyframes, K):
     set_global_config(cfg)
 
@@ -156,11 +156,12 @@ if __name__ == "__main__":
     parser.add_argument("--save-as", default="default")
     parser.add_argument("--no-viz", action="store_true")
     parser.add_argument("--calib", default="")
+    parser.add_argument("--debug", default="False")
+
     
-
-
+    
     args = parser.parse_args()
-
+    debug = args.debug == "True" or args.debug.lower() == "true"
     load_config(args.config)
     print(args.dataset)
     print(config)
@@ -175,6 +176,7 @@ if __name__ == "__main__":
     dataset.subsample(config["dataset"]["subsample"])
     h, w = dataset.get_img_shape()[0]
 
+    #Not touching
     if args.calib:
         with open(args.calib, "r") as f:
             intrinsics = yaml.load(f, Loader=yaml.SafeLoader)
@@ -186,6 +188,7 @@ if __name__ == "__main__":
             intrinsics["height"],
             intrinsics["calibration"],
         )
+    #--------
 
     keyframes = SharedKeyframes(manager, h, w)
     states = SharedStates(manager, h, w)
@@ -200,6 +203,7 @@ if __name__ == "__main__":
     model = load_mast3r(device=device)
     model.share_memory()
 
+    #Not touching
     has_calib = dataset.has_calib()
     use_calib = config["use_calib"]
 
@@ -212,7 +216,8 @@ if __name__ == "__main__":
             device, dtype=torch.float32
         )
         keyframes.set_intrinsics(K)
-
+    #----------
+    
     # remove the trajectory from the previous run
     if dataset.save_results:
         save_dir, seq_name = eval.prepare_savedir(args, dataset)
@@ -234,7 +239,13 @@ if __name__ == "__main__":
 
     frames = []
 
+
+
     while True:
+        # The following variables are shared memory:
+        # - keyframes: SharedKeyframes object that stores keyframe data
+        # - states: SharedStates object that manages shared states and synchronization
+        
         mode = states.get_mode()
         msg = try_get_msg(viz2main)
         last_msg = msg if msg is not None else last_msg

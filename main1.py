@@ -49,7 +49,7 @@ def relocalization(frame, keyframes, factor_graph, retrieval_database):
                 kf_idx,
                 config["reloc"]["min_match_frac"],
                 is_reloc=config["reloc"]["strict"],
-            ):
+            ): # Relocalization Successful!
                 retrieval_database.update(
                     frame,
                     add_after_query=True,
@@ -156,11 +156,12 @@ if __name__ == "__main__":
     parser.add_argument("--save-as", default="default")
     parser.add_argument("--no-viz", action="store_true")
     parser.add_argument("--calib", default="")
+    parser.add_argument("--debug", default="False")
+
     
-
-
+    
     args = parser.parse_args()
-
+    debug = args.debug == "True" or args.debug.lower() == "true"
     load_config(args.config)
     print(args.dataset)
     print(config)
@@ -234,7 +235,12 @@ if __name__ == "__main__":
 
     frames = []
 
+
     while True:
+        # The following variables are shared memory:
+        # - keyframes: SharedKeyframes object that stores keyframe data
+        # - states: SharedStates object that manages shared states and synchronization
+        
         mode = states.get_mode()
         msg = try_get_msg(viz2main)
         last_msg = msg if msg is not None else last_msg
@@ -278,7 +284,7 @@ if __name__ == "__main__":
             continue
 
         if mode == Mode.TRACKING:
-            add_new_kf, match_info, try_reloc = tracker.track(frame)
+            add_new_kf, match_info, try_reloc = tracker.track(frame) # frame.update_pointmap()
             if try_reloc:
                 states.set_mode(Mode.RELOC)
             states.set_frame(frame)
@@ -301,7 +307,7 @@ if __name__ == "__main__":
         if add_new_kf:
             keyframes.append(frame)
             states.queue_global_optimization(len(keyframes) - 1)
-            # In single threaded mode, wait for the backend to finish
+            # In single threaded mode, wait for the backend to finish - written by GPT-40
             while config["single_thread"]:
                 with states.lock:
                     if len(states.global_optimizer_tasks) == 0:

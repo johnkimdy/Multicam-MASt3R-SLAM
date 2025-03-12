@@ -6,11 +6,7 @@ import numpy as np
 import torch
 import pyrealsense2 as rs
 import yaml
-import av
-import time
-import traceback
-import threading
-import os
+# from .new_camera import NewCameraDataset  # Import your new camera class
 
 from mast3r_slam.mast3r_utils import resize_img
 from mast3r_slam.config import config
@@ -214,7 +210,7 @@ class Webcam(MonocularDataset):
         self.use_calibration = False
         self.dataset_path = None
         # load webcam using opencv
-        self.cap = cv2.VideoCapture(1)# FIXME
+        self.cap = cv2.VideoCapture(-1)
         self.save_results = False
 
     def __len__(self):
@@ -231,15 +227,15 @@ class Webcam(MonocularDataset):
         self.timestamps.append(idx / 30)
 
         return img
-    
+
 class iPhone(MonocularDataset):
-    def __init__(self, stream_url = "http://143.248.162.187:4747/video"):
+    def __init__(self, stream_url = "http://143.248.162.178:4747/video"):
         super().__init__()
         self.use_calibration = False
         self.dataset_path = None
         # load webcam using opencv
         self.stream_url = stream_url
-        self.cap = cv2.VideoCapture(self.stream_url) 
+        self.cap = cv2.VideoCapture(self.stream_url) ##FIXME
         self.save_results = False
 
     def __len__(self):
@@ -257,30 +253,6 @@ class iPhone(MonocularDataset):
 
         return img
 
-class Android(MonocularDataset):
-    def __init__(self, stream_url = "http://143.248.162.187:4747/video"):
-        super().__init__()
-        self.use_calibration = False
-        self.dataset_path = None
-        # load webcam using opencv
-        self.stream_url = stream_url
-        self.cap = cv2.VideoCapture(self.stream_url) 
-        self.save_results = False
-
-    def __len__(self):
-        return 999999
-
-    def get_timestamp(self, idx):
-        return self.timestamps[idx]
-
-    def read_img(self, idx):
-        ret, img = self.cap.read()
-        if not ret:
-            raise ValueError("Failed to read image")
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        self.timestamps.append(idx / 30)
-
-        return img
 
 
 class MP4Dataset(MonocularDataset):
@@ -372,269 +344,8 @@ class Intrinsics:
         return Intrinsics(img_size, W, H, K, K_opt, distortion, mapx, mapy)
 
 
-class RTMPStreamDataset(MonocularDataset):
-    def __init__(self, rtmp_url):
-        super().__init__()
-        self.rtmp_url = rtmp_url
-        self.dataset_path = pathlib.Path("rtmp_stream")
-        self.use_calibration = config["use_calib"]
-        self.save_results = True
-        self.timestamps = []
-        self.cap = None
-        self.last_frame = None
-        self.last_frame_time = 0
-        self.frame_count = 0
-        self.fps = 30.0  # Default FPS
-        
-        # Get configuration from rtmp section
-        rtmp_config = config.get("rtmp", {})
-        self.crop_factor = rtmp_config.get("crop_factor", 0.7)
-        self.buffer_size = rtmp_config.get("buffer_size", 1)
-        self.frame_skip = rtmp_config.get("frame_skip", 1)
-        self.use_threading = rtmp_config.get("use_threading", True)
-        
-        # For threaded capture
-        self.frame_ready = False
-        self.current_frame = None
-        self.capture_thread = None
-        self.stop_thread = False
-        self.frame_lock = threading.Lock()
-        
-        print(f"RTMP Stream Config: crop={self.crop_factor}, buffer={self.buffer_size}, skip={self.frame_skip}, threading={self.use_threading}")
-        
-        # Try to connect to the stream
-        self.connect_to_stream()
-        
-        # Initialize with a valid frame
-        if not self.get_test_frame():
-            print("WARNING: Could not get initial frame, creating dummy frame")
-            self.last_frame = np.zeros((512, 512, 3), dtype=np.uint8)
-        
-        # Start capture thread if enabled
-        if self.use_threading:
-            self.start_capture_thread()
-    
-    def start_capture_thread(self):
-        """Start background thread for frame capture"""
-        self.stop_thread = False
-        self.capture_thread = threading.Thread(target=self.capture_frames, daemon=True)
-        self.capture_thread.start()
-        
-    def capture_frames(self):
-        """Background thread function to capture frames"""
-        consecutive_errors = 0
-        max_errors = 5
-        
-        while not self.stop_thread:
-            try:
-                if self.cap is None or not self.cap.isOpened():
-                    if not self.connect_to_stream():
-                        time.sleep(0.5)
-                        consecutive_errors += 1
-                        if consecutive_errors >= max_errors:
-                            print("Too many consecutive errors, stopping capture thread")
-                            break
-                        continue
-                
-                ret, frame = self.cap.read()
-                if ret:
-                    # Convert BGR to RGB
-                    img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                    
-                    # Apply center crop
-                    img = self.apply_center_crop(img)
-                    
-                    # Update the current frame
-                    with self.frame_lock:
-                        self.current_frame = img.copy()  # Create a copy to avoid reference issues
-                        self.frame_ready = True
-                    
-                    consecutive_errors = 0
-                else:
-                    consecutive_errors += 1
-                    if consecutive_errors >= max_errors:
-                        print("Failed to read frame multiple times, reconnecting...")
-                        self.connect_to_stream()
-                        consecutive_errors = 0
-                
-                # Sleep a small amount to prevent CPU hogging
-                time.sleep(0.01)
-                
-            except Exception as e:
-                print(f"Error in capture thread: {e}")
-                consecutive_errors += 1
-                time.sleep(0.5)
-    
-    def apply_center_crop(self, img):
-        """Crop the center portion of the image based on crop_factor"""
-        if img is None or self.crop_factor >= 1.0:
-            return img
-            
-        h, w = img.shape[:2]
-        
-        # Calculate new dimensions
-        new_h = int(h * self.crop_factor)
-        new_w = int(w * self.crop_factor)
-        
-        # Calculate starting coordinates for the crop
-        start_y = (h - new_h) // 2
-        start_x = (w - new_w) // 2
-        
-        # Crop the image
-        cropped_img = img[start_y:start_y+new_h, start_x:start_x+new_w]
-        
-        return cropped_img
-    
-    def connect_to_stream(self):
-        """Connect to the RTMP stream using OpenCV"""
-        try:
-            # Close existing capture if any
-            if self.cap is not None:
-                self.cap.release()
-                
-            # Open new connection with optimized settings for RTMP
-            self.cap = cv2.VideoCapture(self.rtmp_url)
-            
-            # Set buffer size to minimize latency
-            self.cap.set(cv2.CAP_PROP_BUFFERSIZE, self.buffer_size)
-            
-            # Additional optimizations for network streams
-            os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|analyzeduration;0|fflags;nobuffer|fflags;flush_packets"
-            
-            # Get stream properties
-            if self.cap.isOpened():
-                self.fps = self.cap.get(cv2.CAP_PROP_FPS)
-                if self.fps <= 0 or self.fps > 100:  # Unrealistic FPS values
-                    self.fps = 30.0  # Fallback to default
-                print(f"Connected to RTMP stream with FPS: {self.fps}")
-                return True
-            else:
-                print(f"Failed to open RTMP stream: {self.rtmp_url}")
-                return False
-        except Exception as e:
-            print(f"Error connecting to stream: {e}")
-            return False
-            
-    def get_test_frame(self):
-        """Get a test frame to initialize the system"""
-        try:
-            if self.cap is None or not self.cap.isOpened():
-                if not self.connect_to_stream():
-                    return False
-                    
-            ret, frame = self.cap.read()
-            if ret:
-                self.last_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                self.last_frame_time = time.time()
-                return True
-            return False
-        except Exception as e:
-            print(f"Error getting test frame: {e}")
-            return False
-    
-    def __del__(self):
-        """Cleanup resources"""
-        self.stop_thread = True
-        if self.capture_thread and self.capture_thread.is_alive():
-            self.capture_thread.join(timeout=1.0)
-        if self.cap:
-            self.cap.release()
-            
-    def __len__(self):
-        return 1000000  # Just return a large number for streaming
-        
-    def get_timestamp(self, idx):
-        if idx < len(self.timestamps):
-            return self.timestamps[idx]
-        else:
-            timestamp = self.frame_count / self.fps
-            return timestamp
-    
-    def read_img(self, idx):
-        """Override read_img to follow the same pattern as other classes, adding center crop"""
-        # Skip frames if system is falling behind (if idx % frame_skip != 0)
-        if self.frame_skip > 1 and idx % self.frame_skip != 0 and self.last_frame is not None:
-            return self.last_frame
-            
-        try:
-            # If threading is enabled, get frame from the thread
-            if self.use_threading:
-                with self.frame_lock:
-                    if self.frame_ready:
-                        img = self.current_frame.copy()
-                        self.last_frame = img
-                        self.last_frame_time = time.time()
-                        timestamp = self.frame_count / self.fps
-                        self.timestamps.append(timestamp)
-                        self.frame_count += 1
-                        return img
-            
-            # Fallback to direct capture if threading is disabled or no frame is ready
-            if self.cap is None or not self.cap.isOpened():
-                if not self.connect_to_stream():
-                    if self.last_frame is not None:
-                        return self.last_frame
-                    else:
-                        return np.zeros((512, 512, 3), dtype=np.uint8)
-            
-            ret, frame = self.cap.read()
-            if ret:
-                # Convert BGR to RGB
-                img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                
-                # Apply center crop
-                img = self.apply_center_crop(img)
-                
-                self.last_frame = img
-                self.last_frame_time = time.time()
-                timestamp = self.frame_count / self.fps
-                self.timestamps.append(timestamp)
-                self.frame_count += 1
-                return img
-            else:
-                # Try to reconnect if read failed
-                print("Failed to read frame, reconnecting...")
-                self.connect_to_stream()
-                if self.last_frame is not None:
-                    return self.last_frame
-                else:
-                    return np.zeros((512, 512, 3), dtype=np.uint8)
-        except Exception as e:
-            print(f"Error in read_img: {e}")
-            if self.last_frame is not None:
-                return self.last_frame
-            else:
-                return np.zeros((512, 512, 3), dtype=np.uint8)
-            
-    def get_img_shape(self):
-        """Get the shape of the images"""
-        if self.last_frame is None:
-            dummy_frame = np.zeros((512, 512, 3), dtype=np.uint8)
-            img = resize_img(dummy_frame, self.img_size)
-            return img["img"][0].shape[1:], (512, 512)
-            
-        raw_img_shape = self.last_frame.shape[:2]
-        img = resize_img(self.last_frame, self.img_size)
-        return img["img"][0].shape[1:], raw_img_shape
-
-
 def load_dataset(dataset_path):
-    # Handle RTMP URLs first
-    if isinstance(dataset_path, str) and (
-        dataset_path.startswith("rtmp://") or 
-        dataset_path.startswith("rtsp://") or
-        dataset_path.startswith("http://") and dataset_path.endswith(".m3u8")
-    ):
-        try:
-            return RTMPStreamDataset(dataset_path)
-        except Exception as e:
-            print(f"Error creating RTMP dataset: {e}")
-            print("Falling back to dummy RTMP dataset")
-            # Create a dummy dataset that will return black frames
-            return RTMPStreamDataset("dummy://stream")
-        
-    # Handle other dataset types
-    split_dataset_type = str(dataset_path).split("/")
+    split_dataset_type = dataset_path.split("/")
     if "tum" in split_dataset_type:
         return TUMDataset(dataset_path)
     if "euroc" in split_dataset_type:
@@ -648,15 +359,10 @@ def load_dataset(dataset_path):
     if "webcam" in split_dataset_type:
         return Webcam()
     if "iphone" in split_dataset_type:
-        stream_url = config["stream_ip"]["iphone_ip"]
-        return iPhone(stream_url)
-    if "android" in split_dataset_type:
-        stream_url = config["stream_ip"]["android_ip"]
-        return Android(stream_url)
-    if "rtmp" in split_dataset_type:
-        stream_url = config["stream_ip"]["rtmp_ip"]
-        key = config["stream_ip"]["key"]
-        return RTMPStreamDataset(f"{stream_url}/{key}")
+        return iPhone()
+    # if "new_camera" in split_dataset_type:  # Check for the new camera type
+    #     return NewCameraDataset(dataset_path)  # Return the new camera dataset instance
+
     ext = split_dataset_type[-1].split(".")[-1]
     if ext in ["mp4", "avi", "MOV", "mov"]:
         return MP4Dataset(dataset_path)
