@@ -1,4 +1,4 @@
-use_calib: False
+      use_calib: False
 single_thread: False
 dataset:
   subsample: 1
@@ -63,8 +63,8 @@ reloc:
   strict: True
 
 stream_ip:
-  iphone_ip: "http://143.248.162.48:4747/video"
-  android_ip: "http://143.248.163.21:8080/video"
+  iphone_ip: "http://143.248.162.30:4747/video"
+  android_ip: "http://143.248.163.221:8080/video"
   rtmp_ip : "rtmp://pc104709.iptime.org:1935/live"
   key : "video"
 # rtmp://pc104709.iptime.org:1935/live/YourKeyHere

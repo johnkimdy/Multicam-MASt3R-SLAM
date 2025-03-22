@@ -20,6 +20,16 @@ try:
     from torchcodec.decoders import VideoDecoder
 except Exception as e:
     HAS_TORCHCODEC = False
+def initialize_camera(max_index=5):
+    for index in range(max_index):
+        cap = cv2.VideoCapture(index)
+        if cap.isOpened():
+            ret, _ = cap.read()
+            if ret:
+                print(f"Webcam initialized at index {index}")
+                return cap
+            cap.release()
+    raise RuntimeError("No available webcam found")
 
 
 class MonocularDataset(torch.utils.data.Dataset):
@@ -214,7 +224,7 @@ class Webcam(MonocularDataset):
         self.use_calibration = False
         self.dataset_path = None
         # load webcam using opencv
-        self.cap = cv2.VideoCapture(1)# FIXME
+        self.cap = initialize_camera() # 동적으로 인덱스 탐색
         self.save_results = False
 
     def __len__(self):

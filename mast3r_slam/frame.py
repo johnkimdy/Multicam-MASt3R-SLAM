@@ -22,6 +22,7 @@ class Frame:
     img_true_shape: torch.Tensor
     uimg: torch.Tensor
     T_WC: lietorch.Sim3 = lietorch.Sim3.Identity(1)
+    camera_ID: int = 0# Identifier for tracking which stream (camera) the frame came from.
     X_canon: Optional[torch.Tensor] = None
     C: Optional[torch.Tensor] = None
     feat: Optional[torch.Tensor] = None
@@ -29,6 +30,19 @@ class Frame:
     N: int = 0
     N_updates: int = 0
     K: Optional[torch.Tensor] = None
+    # Make Camera ID and test code
+
+    T_init: lietorch.Sim3 = lietorch.Sim3.Identity(1)  
+    # Initial camera pose (extrinsic) for the stream this frame belongs to.
+    # Previously assumed to be identity when only one stream existed.
+    # Now used to track the starting pose of each stream (camera).
+    
+    def __post_init__(self):
+        """Automatically determine if T_init should be computed from keyframes(Relocalization)."""
+        self.use_T_init_from_map = self.camera_ID >= 1
+        # If True, T_init is computed using existing keyframe/map information.
+        # If False, T_init is assumed to be identity (i.e., starting a new stream)
+
 
     def get_score(self, C):
         filtering_score = config["tracking"]["filtering_score"]
@@ -108,7 +122,7 @@ class Frame:
         return self.C / self.N if self.C is not None else None
 
 
-def create_frame(i, img, T_WC, img_size=512, device="cuda:0"):
+def create_frame(i, img, T_WC, img_size=512, device="cuda:0",cameraID=0):
     img = resize_img(img, img_size)
     rgb = img["img"].to(device=device)
     img_shape = torch.tensor(img["true_shape"], device=device)
@@ -118,16 +132,16 @@ def create_frame(i, img, T_WC, img_size=512, device="cuda:0"):
     if downsample > 1:
         uimg = uimg[::downsample, ::downsample]
         img_shape = img_shape // downsample
-    frame = Frame(i, rgb, img_shape, img_true_shape, uimg, T_WC)
+    frame = Frame(i, rgb, img_shape, img_true_shape, uimg, T_WC,cameraID)
     return frame
 
 
 class SharedStates:
-    def __init__(self, manager, h, w, dtype=torch.float32, device="cuda"):
+    def __init__(self, manager, h, w, dtype=torch.float32, device="cuda",num_cam=1):
         self.h, self.w = h, w
         self.dtype = dtype
         self.device = device
-
+        self.num_cams = num_cam
         self.lock = manager.RLock()
         self.paused = manager.Value("i", 0)
         self.mode = manager.Value("i", Mode.INIT)
@@ -141,39 +155,53 @@ class SharedStates:
 
         # fmt:off
         # shared state for the current frame (used for reloc/visualization)
-        self.dataset_idx = torch.zeros(1, device=device, dtype=torch.int).share_memory_()
-        self.img = torch.zeros(3, h, w, device=device, dtype=dtype).share_memory_()
-        self.uimg = torch.zeros(h, w, 3, device="cpu", dtype=dtype).share_memory_()
-        self.img_shape = torch.zeros(1, 2, device=device, dtype=torch.int).share_memory_()
-        self.img_true_shape = torch.zeros(1, 2, device=device, dtype=torch.int).share_memory_()
+        #self.dataset_idx = torch.zeros(1, device=device, dtype=torch.int).share_memory_()
+        #self.img = torch.zeros(3, h, w, device=device, dtype=dtype).share_memory_()
+        #self.uimg = torch.zeros(h, w, 3, device="cpu", dtype=dtype).share_memory_()
+        #self.img_shape = torch.zeros(1, 2, device=device, dtype=torch.int).share_memory_()
+        #self.img_true_shape = torch.zeros(1, 2, device=device, dtype=torch.int).share_memory_()
         self.T_WC = lietorch.Sim3.Identity(1, device=device, dtype=dtype).data.share_memory_()
         self.X = torch.zeros(h * w, 3, device=device, dtype=dtype).share_memory_()
         self.C = torch.zeros(h * w, 1, device=device, dtype=dtype).share_memory_()
         self.feat = torch.zeros(1, self.num_patches, self.feat_dim, device=device, dtype=dtype).share_memory_()
         self.pos = torch.zeros(1, self.num_patches, 2, device=device, dtype=torch.long).share_memory_()
         # fmt: on
+        # fmt:off
+        # shared state for the current frame (used for relocation/visualization)
+        # The first dimension now corresponds to the camera index.
+        self.dataset_idx   = torch.zeros(self.num_cams, 1, device=device, dtype=torch.int).share_memory_()
+        self.img           = torch.zeros(self.num_cams, 3, h, w, device=device, dtype=dtype).share_memory_()
+        self.uimg          = torch.zeros(self.num_cams, h, w, 3, device="cpu", dtype=dtype).share_memory_()
+        self.img_shape     = torch.zeros(self.num_cams, 2, device=device, dtype=torch.int).share_memory_()
+        self.img_true_shape= torch.zeros(self.num_cams, 2, device=device, dtype=torch.int).share_memory_()
+        # self.T_WC          = lietorch.Sim3.Identity(self.num_cams, device=device, dtype=dtype).data.share_memory_()
+        # self.X             = torch.zeros(self.num_cams, h * w, 3, device=device, dtype=dtype).share_memory_()
+        # self.C             = torch.zeros(self.num_cams, h * w, 1, device=device, dtype=dtype).share_memory_()
+        # self.feat          = torch.zeros(self.num_cams, 1, self.num_patches, self.feat_dim, device=device, dtype=dtype).share_memory_()
+        # self.pos           = torch.zeros(self.num_cams, 1, self.num_patches, 2, device=device, dtype=torch.long).share_memory_()
+        # # fmt: on
 
-    def set_frame(self, frame):
+    def set_frame(self, frame,camera_ID =0):
         with self.lock:
-            self.dataset_idx[:] = frame.frame_id
-            self.img[:] = frame.img
-            self.uimg[:] = frame.uimg
-            self.img_shape[:] = frame.img_shape
-            self.img_true_shape[:] = frame.img_true_shape
+            self.dataset_idx[camera_ID][:] = frame.frame_id
+            self.img[camera_ID][:] = frame.img
+            self.uimg[camera_ID][:] = frame.uimg
+            self.img_shape[camera_ID][:] = frame.img_shape
+            self.img_true_shape[camera_ID][:] = frame.img_true_shape
             self.T_WC[:] = frame.T_WC.data
             self.X[:] = frame.X_canon
             self.C[:] = frame.C
             self.feat[:] = frame.feat
             self.pos[:] = frame.pos
 
-    def get_frame(self):
+    def get_frame(self, camera_ID =0):
         with self.lock:
             frame = Frame(
                 int(self.dataset_idx[0]),
-                self.img,
-                self.img_shape,
-                self.img_true_shape,
-                self.uimg,
+                self.img[camera_ID],
+                self.img_shape[camera_ID],
+                self.img_true_shape[camera_ID],
+                self.uimg[camera_ID],
                 lietorch.Sim3(self.T_WC),
             )
             frame.X_canon = self.X

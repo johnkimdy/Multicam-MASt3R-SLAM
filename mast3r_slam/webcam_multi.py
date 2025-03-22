@@ -65,24 +65,25 @@ class WebcamSingle(MonocularDataset):
         self.use_calibration = False
         self.dataset_path = f"webcam:{camera_id}"
         self.camera_id = camera_id
+        self.img_size = 512
         
-        # Try to open the camera
-        self.cap = cv2.VideoCapture(camera_id)
-        if not self.cap.isOpened():
-            raise ValueError(f"Failed to open camera {camera_id}")
-            
+        # Don't initialize camera here - do it in the process that needs it
+        self.cap = None
         self.save_results = False
         self.timestamps = []
+    
+    def ensure_camera_initialized(self):
+        """Ensure camera is initialized in the current process"""
+        if self.cap is None:
+            self.cap = cv2.VideoCapture(self.camera_id)
+            if not self.cap.isOpened():
+                raise ValueError(f"Failed to open camera {self.camera_id}")
     
     def __len__(self):
         return 999999
     
-    def get_timestamp(self, idx):
-        if idx < len(self.timestamps):
-            return self.timestamps[idx]
-        return 0.0
-    
     def read_img(self, idx):
+        self.ensure_camera_initialized()
         ret, img = self.cap.read()
         if not ret:
             raise ValueError(f"Failed to read image from camera {self.camera_id}")
@@ -93,8 +94,14 @@ class WebcamSingle(MonocularDataset):
         
         return img.astype(np.float32) / 255.0
         
-    # def get_image(self, idx):
-    #     img = self.read_img(idx)
-    #     if self.use_calibration and self.camera_intrinsics is not None:
-    #         img = self.camera_intrinsics.remap(img)
-    #     return img
+    def close(self):
+        """Clean up resources"""
+        if self.cap is not None:
+            self.cap.release()
+            self.cap = None
+        
+    def get_image(self, idx):
+        img = self.read_img(idx)
+        if self.use_calibration and self.camera_intrinsics is not None:
+            img = self.camera_intrinsics.remap(img)
+        return img

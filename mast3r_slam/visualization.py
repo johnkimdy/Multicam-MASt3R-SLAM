@@ -96,6 +96,7 @@ class Window(WindowEvents):
         self.viz2main = viz2main
 
     def render(self, t: float, frametime: float):
+        # Set up viewport and enable depth testing
         self.viewport.use()
         self.ctx.enable(moderngl.DEPTH_TEST)
         if self.culling:
@@ -106,6 +107,7 @@ class Window(WindowEvents):
         if self.show_axis:
             self.axis.render(self.camera)
 
+        # get current frame from states
         curr_frame = self.states.get_frame()
         h, w = curr_frame.img_shape.flatten()
         self.frustums.make_frustum(h, w)
@@ -113,6 +115,7 @@ class Window(WindowEvents):
         self.curr_img_np = curr_frame.uimg.numpy()
         self.curr_img.write(self.curr_img_np)
 
+        # get current camera pose: cam_T_WC
         cam_T_WC = as_SE3(curr_frame.T_WC).cpu()
         if self.follow_cam:
             T_WC = cam_T_WC.matrix().numpy().astype(

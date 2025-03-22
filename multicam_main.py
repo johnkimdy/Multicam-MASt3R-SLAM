@@ -219,92 +219,264 @@ def run_backend(cfg, model, states, keyframes, K):
                 if len(states.global_optimizer_tasks) > 0:
                     idx = states.global_optimizer_tasks.pop(0)
         
-
-
-def run_camera_process(camera_id, dataset, config, model, states, keyframes, K, main2viz, viz2main):
-    """Run the tracking process for a single camera"""
+def run_camera_process(camera_id, dataset_path, config, model, states, keyframes, K, main2viz, viz2main):
+    """Run the tracking process for a single camera with extensive debug prints"""
+    print(f"[CAM {camera_id}] Process initializing with dataset {dataset_path}")
+    
+    # Load dataset within the process to avoid pickling issues with VideoCapture
+    if isinstance(dataset_path, str) and dataset_path.startswith("webcam:"):
+        from mast3r_slam.multicam_dataloader import parse_webcam_spec, WebcamDataset
+        camera_ids = parse_webcam_spec(dataset_path)
+        print(f"[CAM {camera_id}] Parsed webcam IDs: {camera_ids}")
+        # For webcam inputs, we create a single camera dataset per process
+        dataset = WebcamDataset(camera_ids)
+        print(f"[CAM {camera_id}] Created WebcamDataset with ID: {dataset.camera_ids[0]}")
+    else:
+        print(f"[CAM {camera_id}] Loading standard dataset: {dataset_path}")
+        if isinstance(dataset_path, str):
+            from mast3r_slam.dataloader import load_dataset
+            dataset = load_dataset(dataset_path)
+            dataset.subsample(config["dataset"]["subsample"])
+        else:
+            # Backwards compatibility with original code
+            print(f"[CAM {camera_id}] Using provided dataset object (not recommended)")
+            dataset = dataset_path
+    
     state = states.get_state(camera_id)
+    print(f"[CAM {camera_id}] Got state object, initial mode: {state.get_mode()}")
+    
     tracker = FrameTracker(model, keyframes, device=keyframes.device)
+    print(f"[CAM {camera_id}] Created tracker")
     
     i = 0
     fps_timer = time.time()
     
-    print(f"Camera {camera_id} process started")
+    print(f"[CAM {camera_id}] Process fully initialized and entering main loop")
     
-    while True:
-        # Handle termination
-        if state.get_mode() == Mode.TERMINATED:
-            print(f"Camera {camera_id} process terminated")
-            break
+    try:
+        while True:
+            # Handle termination
+            current_mode = state.get_mode()
+            print(f"[CAM {camera_id}] ITERATION {i} - Current mode: {current_mode}")
             
-        # Handle pause
-        if state.is_paused():
-            time.sleep(0.01)
-            continue
-            
-        # Handle viewer messages
-        msg = try_get_msg(viz2main)
-        if msg is not None and msg.is_terminated:
-            state.set_mode(Mode.TERMINATED)
-            break
-        
-        # End of dataset
-        if i >= len(dataset):
-            state.set_mode(Mode.TERMINATED)
-            break
-            
-        # Get next frame
-        timestamps, imgs = dataset[i]
-        img = imgs[camera_id]
-        timestamp = timestamps[camera_id]
-        
-        # Get camera pose
-        if i == 0 and camera_id == 0:
-            # First camera initializes the world
-            T_WC = lietorch.Sim3.Identity(1, device=keyframes.device)
-        elif i == 0 and not config["multicamera"]["initialize_all"]:
-            # Other cameras start in RELOC mode to find their pose relative to camera 0
-            T_WC = lietorch.Sim3.Identity(1, device=keyframes.device)
-            state.set_mode(Mode.RELOC)
-        else:
-            # Otherwise use the last camera pose
-            T_WC = state.get_frame().T_WC
-            
-        frame = create_frame(i, img, T_WC, img_size=dataset.img_size, device=keyframes.device)
-        
-        mode = state.get_mode()
-        if mode == Mode.INIT:
-            # Initialize via mono inference
-            X_init, C_init = mast3r_inference_mono(model, frame)
-            frame.update_pointmap(X_init, C_init)
-            keyframes.append(frame)
-            state.queue_global_optimization(len(keyframes) - 1)
-            state.set_mode(Mode.TRACKING)
-            state.set_frame(frame)
-            
-        elif mode == Mode.TRACKING:
-            add_new_kf, match_info, try_reloc = tracker.track(frame)
-            if try_reloc:
-                state.set_mode(Mode.RELOC)
-            state.set_frame(frame)
-            
-            if add_new_kf:
-                print(f"Camera {camera_id}: Adding new keyframe at frame {i}")
-                keyframes.append(frame)
-                state.queue_global_optimization(len(keyframes) - 1)
+            if current_mode == Mode.TERMINATED:
+                print(f"[CAM {camera_id}] TERMINATING - Mode is TERMINATED")
+                break
                 
-        elif mode == Mode.RELOC:
-            X, C = mast3r_inference_mono(model, frame)
-            frame.update_pointmap(X, C)
-            state.set_frame(frame)
-            state.queue_reloc()
+            # Handle pause
+            if state.is_paused():
+                print(f"[CAM {camera_id}] PAUSED - Waiting...")
+                time.sleep(0.01)
+                continue
+                
+            # Handle viewer messages
+            print(f"[CAM {camera_id}] Checking for viewer messages")
+            msg = try_get_msg(viz2main)
+            if msg is not None:
+                print(f"[CAM {camera_id}] Received viewer message: {msg}")
+                if msg.is_terminated:
+                    print(f"[CAM {camera_id}] TERMINATING - Received terminate message from viewer")
+                    state.set_mode(Mode.TERMINATED)
+                    break
             
-        # Log time occasionally
-        if i % 30 == 0:
-            FPS = i / (time.time() - fps_timer)
-            print(f"Camera {camera_id} FPS: {FPS}")
+            # End of dataset
+            print(f"[CAM {camera_id}] Checking dataset length: {i} vs {len(dataset)}")
+            if i >= len(dataset):
+                print(f"[CAM {camera_id}] TERMINATING - Reached end of dataset")
+                state.set_mode(Mode.TERMINATED)
+                break
+                
+            # Get next frame
+            print(f"[CAM {camera_id}] Attempting to get frame {i} from dataset")
+            try:
+                timestamps, imgs = dataset[i]
+                print(f"[CAM {camera_id}] Got frame {i}, images shape: {[img.shape for img in imgs]}")
+                
+                # For webcam dataset with one camera per process, use index 0
+                if isinstance(dataset, WebcamDataset):
+                    print(f"[CAM {camera_id}] Using WebcamDataset with single camera")
+                    img = imgs[0]  
+                    timestamp = timestamps[0]
+                else:
+                    print(f"[CAM {camera_id}] Using standard dataset, accessing image {camera_id}")
+                    img = imgs[camera_id]
+                    timestamp = timestamps[camera_id]
+                    
+                print(f"[CAM {camera_id}] Successfully extracted image with shape {img.shape}")
+            except Exception as e:
+                print(f"[CAM {camera_id}] ERROR getting frame: {e}")
+                time.sleep(0.1)  # Avoid busy waiting
+                continue
             
-        i += 1
+            # Get camera pose
+            print(f"[CAM {camera_id}] Determining camera pose for frame {i}")
+            if i == 0 and camera_id == 0:
+                print(f"[CAM {camera_id}] First camera, first frame - initializing world")
+                # First camera initializes the world
+                T_WC = lietorch.Sim3.Identity(1, device=keyframes.device)
+            elif i == 0 and not config["multicamera"]["initialize_all"]:
+                print(f"[CAM {camera_id}] Secondary camera, first frame - entering RELOC mode")
+                # Other cameras start in RELOC mode to find their pose relative to camera 0
+                T_WC = lietorch.Sim3.Identity(1, device=keyframes.device)
+                state.set_mode(Mode.RELOC)
+            else:
+                print(f"[CAM {camera_id}] Using previous camera pose")
+                # Otherwise use the last camera pose
+                T_WC = state.get_frame().T_WC
+            
+            print(f"[CAM {camera_id}] Creating frame object")
+            frame = create_frame(i, img, T_WC, img_size=dataset.img_size, device=keyframes.device)
+            
+            mode = state.get_mode()
+            print(f"[CAM {camera_id}] Processing frame {i} in mode: {mode}")
+            
+            if mode == Mode.INIT:
+                print(f"[CAM {camera_id}] INIT MODE - Running inference")
+                # Initialize via mono inference
+                X_init, C_init = mast3r_inference_mono(model, frame)
+                print(f"[CAM {camera_id}] INIT MODE - Updating pointmap")
+                frame.update_pointmap(X_init, C_init)
+                print(f"[CAM {camera_id}] INIT MODE - Adding to keyframes")
+                keyframes.append(frame)
+                print(f"[CAM {camera_id}] INIT MODE - Queueing optimization")
+                state.queue_global_optimization(len(keyframes) - 1)
+                print(f"[CAM {camera_id}] INIT MODE - Switching to TRACKING mode")
+                state.set_mode(Mode.TRACKING)
+                state.set_frame(frame)
+                
+            elif mode == Mode.TRACKING:
+                print(f"[CAM {camera_id}] TRACKING MODE - Tracking frame")
+                add_new_kf, match_info, try_reloc = tracker.track(frame)
+                print(f"[CAM {camera_id}] TRACKING MODE - Results: new_kf={add_new_kf}, try_reloc={try_reloc}")
+                
+                if try_reloc:
+                    print(f"[CAM {camera_id}] TRACKING MODE - Switching to RELOC mode")
+                    state.set_mode(Mode.RELOC)
+                
+                state.set_frame(frame)
+                
+                if add_new_kf:
+                    print(f"[CAM {camera_id}] TRACKING MODE - Adding new keyframe at frame {i}")
+                    keyframes.append(frame)
+                    print(f"[CAM {camera_id}] TRACKING MODE - Queueing optimization")
+                    state.queue_global_optimization(len(keyframes) - 1)
+                    
+            elif mode == Mode.RELOC:
+                print(f"[CAM {camera_id}] RELOC MODE - Running inference")
+                X, C = mast3r_inference_mono(model, frame)
+                print(f"[CAM {camera_id}] RELOC MODE - Updating pointmap")
+                frame.update_pointmap(X, C)
+                print(f"[CAM {camera_id}] RELOC MODE - Setting frame")
+                state.set_frame(frame)
+                print(f"[CAM {camera_id}] RELOC MODE - Queueing for relocalization")
+                state.queue_reloc()
+                
+            # Log time occasionally
+            if i % 30 == 0:
+                current_time = time.time()
+                elapsed = current_time - fps_timer
+                FPS = 30 / (elapsed if elapsed > 0 else 1) 
+                print(f"[CAM {camera_id}] FPS: {FPS:.2f}")
+                fps_timer = current_time
+                
+            print(f"[CAM {camera_id}] Completed iteration {i}, incrementing counter")
+            i += 1
+            
+    except Exception as e:
+        print(f"[CAM {camera_id}] CRITICAL ERROR: {e}")
+        import traceback
+        traceback.print_exc()
+    finally:
+        # Clean up
+        print(f"[CAM {camera_id}] Cleaning up resources")
+        if hasattr(dataset, 'close'):
+            dataset.close()
+        print(f"[CAM {camera_id}] Process exited")
+
+# def run_camera_process(camera_id, dataset, config, model, states, keyframes, K, main2viz, viz2main):
+    # """Run the tracking process for a single camera"""
+    # state = states.get_state(camera_id)
+    # tracker = FrameTracker(model, keyframes, device=keyframes.device)
+    
+    # i = 0
+    # fps_timer = time.time()
+    
+    # print(f"Camera {camera_id} process started")
+    
+    # while True:
+    #     # Handle termination
+    #     if state.get_mode() == Mode.TERMINATED:
+    #         print(f"Camera {camera_id} process terminated")
+    #         break
+            
+    #     # Handle pause
+    #     if state.is_paused():
+    #         time.sleep(0.01)
+    #         continue
+            
+    #     # Handle viewer messages
+    #     msg = try_get_msg(viz2main)
+    #     if msg is not None and msg.is_terminated:
+    #         state.set_mode(Mode.TERMINATED)
+    #         break
+        
+    #     # End of dataset
+    #     if i >= len(dataset):
+    #         state.set_mode(Mode.TERMINATED)
+    #         break
+            
+    #     # Get next frame
+    #     timestamps, imgs = dataset[i]
+    #     img = imgs[camera_id]
+    #     timestamp = timestamps[camera_id]
+        
+    #     # Get camera pose
+    #     if i == 0 and camera_id == 0:
+    #         # First camera initializes the world
+    #         T_WC = lietorch.Sim3.Identity(1, device=keyframes.device)
+    #     elif i == 0 and not config["multicamera"]["initialize_all"]:
+    #         # Other cameras start in RELOC mode to find their pose relative to camera 0
+    #         T_WC = lietorch.Sim3.Identity(1, device=keyframes.device)
+    #         state.set_mode(Mode.RELOC)
+    #     else:
+    #         # Otherwise use the last camera pose
+    #         T_WC = state.get_frame().T_WC
+            
+    #     frame = create_frame(i, img, T_WC, img_size=dataset.img_size, device=keyframes.device)
+        
+    #     mode = state.get_mode()
+    #     if mode == Mode.INIT:
+    #         # Initialize via mono inference
+    #         X_init, C_init = mast3r_inference_mono(model, frame)
+    #         frame.update_pointmap(X_init, C_init)
+    #         keyframes.append(frame)
+    #         state.queue_global_optimization(len(keyframes) - 1)
+    #         state.set_mode(Mode.TRACKING)
+    #         state.set_frame(frame)
+            
+    #     elif mode == Mode.TRACKING:
+    #         add_new_kf, match_info, try_reloc = tracker.track(frame)
+    #         if try_reloc:
+    #             state.set_mode(Mode.RELOC)
+    #         state.set_frame(frame)
+            
+    #         if add_new_kf:
+    #             print(f"Camera {camera_id}: Adding new keyframe at frame {i}")
+    #             keyframes.append(frame)
+    #             state.queue_global_optimization(len(keyframes) - 1)
+                
+    #     elif mode == Mode.RELOC:
+    #         X, C = mast3r_inference_mono(model, frame)
+    #         frame.update_pointmap(X, C)
+    #         state.set_frame(frame)
+    #         state.queue_reloc()
+            
+    #     # Log time occasionally
+    #     if i % 30 == 0:
+    #         FPS = i / (time.time() - fps_timer)
+    #         print(f"Camera {camera_id} FPS: {FPS}")
+            
+    #     i += 1
 
 
 if __name__ == "__main__":
@@ -344,7 +516,7 @@ if __name__ == "__main__":
         config["multicamera"]["enabled"] = True
         config["multicamera"]["cameras"] = len(args.datasets)
         dataset = load_multi_dataset(args.datasets)
-        dataset.subsample(config["dataset"]["subsample"])
+        # dataset.subsample(config["dataset"]["subsample"])
         h, w = dataset.get_img_shape()[0]
         num_cameras = len(args.datasets)
 
