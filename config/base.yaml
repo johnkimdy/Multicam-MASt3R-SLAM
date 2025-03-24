@@ -1,4 +1,4 @@
-      use_calib: False
+use_calib: False
 single_thread: False
 dataset:
   subsample: 1
@@ -6,10 +6,10 @@ dataset:
   center_principle_point: True
 
 multicamera:
-  enabled: false
-  cameras: 1  # Number of cameras to use
-  initialize_all: false  # If true, all cameras initialize independently; if false, only first camera initializes world
-
+  enabled: True
+  cameras: 2  # Number of cameras to use
+  initialize_all: False  # If true, all cameras initialize independently; if false, only first camera initializes world
+  reference_id: 0
 matching:
   max_iter: 10
   lambda_init: 1e-8
@@ -63,8 +63,8 @@ reloc:
   strict: True
 
 stream_ip:
-  iphone_ip: "http://143.248.162.30:4747/video"
-  android_ip: "http://143.248.163.221:8080/video"
-  rtmp_ip : "rtmp://pc104709.iptime.org:1935/live"
-  key : "video"
+   iphone_ip: "http://143.248.162.30:4747/video"
+   android_ip: "http://143.248.163.221:8080/video"
+#   rtmp_ip : "rtmp://pc104709.iptime.org:1935/live"
+#   key : "video"
 # rtmp://pc104709.iptime.org:1935/live/YourKeyHere

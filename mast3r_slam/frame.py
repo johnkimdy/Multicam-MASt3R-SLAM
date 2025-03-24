@@ -14,6 +14,7 @@ class Mode(Enum):
     TERMINATED = 3
 
 
+
 @dataclasses.dataclass
 class Frame:
     frame_id: int
@@ -137,14 +138,18 @@ def create_frame(i, img, T_WC, img_size=512, device="cuda:0",cameraID=0):
 
 
 class SharedStates:
-    def __init__(self, manager, h, w, dtype=torch.float32, device="cuda",num_cam=1):
+    def __init__(self, manager, h, w, dtype=torch.float32, device="cuda",num_cams=1):
         self.h, self.w = h, w
         self.dtype = dtype
         self.device = device
-        self.num_cams = num_cam
+        self.num_cams = num_cams
         self.lock = manager.RLock()
         self.paused = manager.Value("i", 0)
         self.mode = manager.Value("i", Mode.INIT)
+        # self.global_mode = manager.Value("i", Mode.INIT)
+        # Per-camera modes (array of shared values)
+        # self.camera_modes = [manager.Value("i", Mode.INIT) for _ in range(num_cams)]
+        self.num_cameras = num_cams
         self.reloc_sem = manager.Value("i", 0)
         self.global_optimizer_tasks = manager.list()
         self.edges_ii = manager.list()
@@ -153,61 +158,52 @@ class SharedStates:
         self.feat_dim = 1024
         self.num_patches = h * w // (16 * 16)
 
+
         # fmt:off
-        # shared state for the current frame (used for reloc/visualization)
-        #self.dataset_idx = torch.zeros(1, device=device, dtype=torch.int).share_memory_()
-        #self.img = torch.zeros(3, h, w, device=device, dtype=dtype).share_memory_()
-        #self.uimg = torch.zeros(h, w, 3, device="cpu", dtype=dtype).share_memory_()
-        #self.img_shape = torch.zeros(1, 2, device=device, dtype=torch.int).share_memory_()
-        #self.img_true_shape = torch.zeros(1, 2, device=device, dtype=torch.int).share_memory_()
-        self.T_WC = lietorch.Sim3.Identity(1, device=device, dtype=dtype).data.share_memory_()
-        self.X = torch.zeros(h * w, 3, device=device, dtype=dtype).share_memory_()
-        self.C = torch.zeros(h * w, 1, device=device, dtype=dtype).share_memory_()
-        self.feat = torch.zeros(1, self.num_patches, self.feat_dim, device=device, dtype=dtype).share_memory_()
-        self.pos = torch.zeros(1, self.num_patches, 2, device=device, dtype=torch.long).share_memory_()
-        # fmt: on
-        # fmt:off
-        # shared state for the current frame (used for relocation/visualization)
-        # The first dimension now corresponds to the camera index.
-        self.dataset_idx   = torch.zeros(self.num_cams, 1, device=device, dtype=torch.int).share_memory_()
-        self.img           = torch.zeros(self.num_cams, 3, h, w, device=device, dtype=dtype).share_memory_()
-        self.uimg          = torch.zeros(self.num_cams, h, w, 3, device="cpu", dtype=dtype).share_memory_()
-        self.img_shape     = torch.zeros(self.num_cams, 2, device=device, dtype=torch.int).share_memory_()
-        self.img_true_shape= torch.zeros(self.num_cams, 2, device=device, dtype=torch.int).share_memory_()
-        # self.T_WC          = lietorch.Sim3.Identity(self.num_cams, device=device, dtype=dtype).data.share_memory_()
-        # self.X             = torch.zeros(self.num_cams, h * w, 3, device=device, dtype=dtype).share_memory_()
-        # self.C             = torch.zeros(self.num_cams, h * w, 1, device=device, dtype=dtype).share_memory_()
-        # self.feat          = torch.zeros(self.num_cams, 1, self.num_patches, self.feat_dim, device=device, dtype=dtype).share_memory_()
-        # self.pos           = torch.zeros(self.num_cams, 1, self.num_patches, 2, device=device, dtype=torch.long).share_memory_()
-        # # fmt: on
+        self.dataset_idx = torch.zeros(num_cams, device=device, dtype=torch.int).share_memory_()
+        self.img = torch.zeros(num_cams, 3, h, w, device=device, dtype=dtype).share_memory_()
+        self.uimg = torch.zeros(num_cams, h, w, 3, device="cpu", dtype=dtype).share_memory_()
+        self.img_shape = torch.zeros(num_cams, 1, 2, device=device, dtype=torch.int).share_memory_()
+        self.img_true_shape = torch.zeros(num_cams, 1, 2, device=device, dtype=torch.int).share_memory_()
+        self.T_WC = torch.zeros(num_cams, 1, lietorch.Sim3.embedded_dim, device=device, dtype=dtype).share_memory_()
+        self.X = torch.zeros(num_cams, h * w, 3, device=device, dtype=dtype).share_memory_()
+        self.C = torch.zeros(num_cams, h * w, 1, device=device, dtype=dtype).share_memory_()
+        self.N = torch.zeros(num_cams, device=device, dtype=torch.int).share_memory_()
+        self.feat = torch.zeros(num_cams, 1, self.num_patches, self.feat_dim, device=device, dtype=dtype).share_memory_()
+        self.pos = torch.zeros(num_cams, 1, self.num_patches, 2, device=device, dtype=torch.long).share_memory_()
+
 
     def set_frame(self, frame,camera_ID =0):
         with self.lock:
-            self.dataset_idx[camera_ID][:] = frame.frame_id
-            self.img[camera_ID][:] = frame.img
-            self.uimg[camera_ID][:] = frame.uimg
-            self.img_shape[camera_ID][:] = frame.img_shape
-            self.img_true_shape[camera_ID][:] = frame.img_true_shape
-            self.T_WC[:] = frame.T_WC.data
-            self.X[:] = frame.X_canon
-            self.C[:] = frame.C
-            self.feat[:] = frame.feat
-            self.pos[:] = frame.pos
+            # set the attributes
+            self.dataset_idx[camera_ID] = frame.frame_id
+            self.img[camera_ID] = frame.img
+            self.uimg[camera_ID] = frame.uimg
+            self.img_shape[camera_ID] = frame.img_shape
+            self.img_true_shape[camera_ID] = frame.img_true_shape
+            self.T_WC[camera_ID] = frame.T_WC.data
+            self.X[camera_ID] = frame.X_canon
+            self.C[camera_ID] = frame.C
+            self.feat[camera_ID] = frame.feat
+            self.pos[camera_ID] = frame.pos
+            self.N[camera_ID] = frame.N
 
     def get_frame(self, camera_ID =0):
         with self.lock:
+            # put all of the data into a frame
             frame = Frame(
-                int(self.dataset_idx[0]),
+                int(self.dataset_idx[camera_ID]),
                 self.img[camera_ID],
                 self.img_shape[camera_ID],
                 self.img_true_shape[camera_ID],
                 self.uimg[camera_ID],
-                lietorch.Sim3(self.T_WC),
+                lietorch.Sim3(self.T_WC[camera_ID]),
             )
-            frame.X_canon = self.X
-            frame.C = self.C
-            frame.feat = self.feat
-            frame.pos = self.pos
+            frame.X_canon = self.X[camera_ID]
+            frame.C = self.C[camera_ID]
+            frame.feat = self.feat[camera_ID]
+            frame.pos = self.pos[camera_ID]
+            frame.N = int(self.N[camera_ID])
             return frame
 
     def queue_global_optimization(self, idx):
@@ -231,6 +227,38 @@ class SharedStates:
     def set_mode(self, mode):
         with self.lock:
             self.mode.value = mode
+
+    # def set_mode(self, mode, camera_id=None):
+    #     with self.lock:
+    #         if mode in [Mode.INIT, Mode.TERMINATED]:
+    #             self.global_mode.value = mode.value
+    #             # When setting global mode, reset all camera modes
+    #             for cam_mode in self.camera_modes:
+    #                 cam_mode.value = mode.value
+    #         else:
+    #             if camera_id is None:
+    #                 raise ValueError("Camera ID required for TRACKING and RELOC modes")
+    #             if camera_id >= self.num_cameras:
+    #                 raise ValueError(f"Camera ID {camera_id} out of range (0-{self.num_cameras-1})")
+    #             self.camera_modes[camera_id].value = mode.value
+
+    # def get_mode(self, camera_id=None):
+    #     with self.lock:
+    #         if camera_id is None:
+    #             return Mode(self.global_mode.value)
+    #         if self.global_mode.value in [Mode.INIT.value, Mode.TERMINATED.value]:
+    #             return Mode(self.global_mode.value)
+    #         return Mode(self.camera_modes[camera_id].value)
+
+    # def is_any_tracking(self):
+    #     with self.lock:
+    #         if self.global_mode.value in [Mode.INIT.value, Mode.TERMINATED.value]:
+    #             return False
+    #         return any(mode.value == Mode.TRACKING.value for mode in self.camera_modes)
+
+    # def are_all_terminated(self):
+    #     with self.lock:
+    #         return self.global_mode.value == Mode.TERMINATED.value
 
     def pause(self):
         with self.lock:

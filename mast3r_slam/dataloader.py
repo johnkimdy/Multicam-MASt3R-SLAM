@@ -20,16 +20,16 @@ try:
     from torchcodec.decoders import VideoDecoder
 except Exception as e:
     HAS_TORCHCODEC = False
-def initialize_camera(max_index=5):
-    for index in range(max_index):
+def initialize_camera(max_index=10):
+    for index in range(0,max_index):
         cap = cv2.VideoCapture(index)
         if cap.isOpened():
             ret, _ = cap.read()
             if ret:
-                print(f"Webcam initialized at index {index}")
+                print(f"Camera initialized at index {index}")
                 return cap
             cap.release()
-    raise RuntimeError("No available webcam found")
+    raise RuntimeError("No available camera found")
 
 
 class MonocularDataset(torch.utils.data.Dataset):
@@ -41,7 +41,7 @@ class MonocularDataset(torch.utils.data.Dataset):
         self.camera_intrinsics = None
         self.use_calibration = config["use_calib"]
         self.save_results = True
-
+    #   
     def __len__(self):
         return len(self.rgb_files)
 
@@ -216,7 +216,24 @@ class RealsenseDataset(MonocularDataset):
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         img = img.astype(self.dtype)
         return img
-
+    
+class ReplicaMultiAgent(MonocularDataset):
+    def __init__(self, dataset_path=None):
+        super().__init__()
+        self.dataset_path = pathlib.Path(dataset_path)
+        
+        # Find all jpg frame files and sort them naturally
+        self.rgb_files = natsorted(list(self.dataset_path.glob("frame*.jpg")))
+        
+        if len(self.rgb_files) == 0:
+            raise ValueError(f"No frame*.jpg files found in {self.dataset_path}")
+            
+        # Generate timestamps (assuming 30fps)
+        self.timestamps = np.arange(0, len(self.rgb_files)).astype(self.dtype) / 30.0
+        
+        # Defaults for calibration (can be adjusted as needed)
+        self.use_calibration = config.get("use_calib", False)
+        self.save_results = False
 
 class Webcam(MonocularDataset):
     def __init__(self):
@@ -291,6 +308,7 @@ class Android(MonocularDataset):
         self.timestamps.append(idx / 30)
 
         return img
+
 
 
 class MP4Dataset(MonocularDataset):
@@ -663,6 +681,8 @@ def load_dataset(dataset_path):
     if "android" in split_dataset_type:
         stream_url = config["stream_ip"]["android_ip"]
         return Android(stream_url)
+    if "replicamultiagent" in split_dataset_type:
+        return ReplicaMultiAgent(dataset_path)
     if "rtmp" in split_dataset_type:
         stream_url = config["stream_ip"]["rtmp_ip"]
         key = config["stream_ip"]["key"]
@@ -671,3 +691,24 @@ def load_dataset(dataset_path):
     if ext in ["mp4", "avi", "MOV", "mov"]:
         return MP4Dataset(dataset_path)
     return RGBFiles(dataset_path)
+# 새로운 multi-dataset 로더 함수
+
+
+def load_multi_dataset(dataset_paths, camera_ids=None,reference_canera_id=None):
+    """
+    여러 데이터셋 경로를 받아 각 경로에 해당하는 데이터셋을 로드하고,
+    MultiDataset으로 묶어 반환합니다.
+    
+    Args:
+        dataset_paths (list): 데이터셋 경로 문자열의 리스트
+        camera_ids (list, optional): 각 데이터셋의 camera_id 리스트 (없으면 0부터 자동 할당)
+    예시: 다중 데이터셋 사용
+        dataset_paths = ["path/to/dataset1", "path/to/dataset2"]
+        camera_ids = [0, 1]
+        multi_dataset = load_multi_dataset(dataset_paths, camera_ids)
+    """
+
+
+    from .multi_dataset import MultiDataset  # 파일 분리 후 import
+    datasets = [load_dataset(path) for path in dataset_paths]
+    return MultiDataset(datasets, camera_ids,reference_camera_id=reference_canera_id)

@@ -89,9 +89,14 @@ class Window(WindowEvents):
 
         self.textures = dict()
         self.mtime = self.pointmap_prog.extra["meta"].resolved_path.stat().st_mtime
-        self.curr_img, self.kf_img = Image(), Image()
-        self.curr_img_np, self.kf_img_np = None, None
-
+        self.reference_curr_img, self.kf_img = Image(), Image()
+        if config["multicamera"]["enabled"]:
+            self.reference_camera_ID = config["multicamera"]["reference_id"]
+        else:
+            self.reference_camera_ID = 0
+        self.reference_curr_img_np, self.kf_img_np = None, None
+        self.curr_imgs = {}       # camera_id -> Image() object
+        self.curr_imgs_np = {}    # camera_id -> np array
         self.main2viz = main2viz
         self.viz2main = viz2main
 
@@ -108,15 +113,33 @@ class Window(WindowEvents):
             self.axis.render(self.camera)
 
         # get current frame from states
-        curr_frame = self.states.get_frame()
-        h, w = curr_frame.img_shape.flatten()
+        reference_curr_frame = self.states.get_frame(self.reference_camera_ID)
+        h, w = reference_curr_frame.img_shape.flatten()
         self.frustums.make_frustum(h, w)
+        num_cameras = config["multicamera"]["cameras"] 
+        for i in range(num_cameras):
+            # Skip updating the reference camera in this loop.
+            if i == self.reference_camera_ID:
+                continue
+            
+            # Retrieve the i-th frame from the state.
+            frame = self.states.get_frame(i)
+            if frame is not None:
+                # Convert frame.uimg to a numpy array and store it.
+                self.curr_imgs_np[i] = frame.uimg.numpy()
+                # Create an Image() object if one does not exist yet.
+                if i not in self.curr_imgs:
+                    self.curr_imgs[i] = Image()
+                # Write the image data into the corresponding Image() object.
+                self.curr_imgs[i].write(self.curr_imgs_np[i])
 
-        self.curr_img_np = curr_frame.uimg.numpy()
-        self.curr_img.write(self.curr_img_np)
+            # For the reference camera (assumed to be handled separately)
+        reference_curr_frame = self.states.get_frame(self.refrence_camera_ID)
+        self.reference_curr_img_np = reference_curr_frame.uimg.numpy()
+        self.reference_curr_img.write(self.reference_curr_img_np)
 
         # get current camera pose: cam_T_WC
-        cam_T_WC = as_SE3(curr_frame.T_WC).cpu()
+        cam_T_WC = as_SE3(reference_curr_frame.T_WC).cpu()
         if self.follow_cam:
             T_WC = cam_T_WC.matrix().numpy().astype(
                 dtype=np.float32
@@ -129,7 +152,7 @@ class Window(WindowEvents):
             scale=self.frustum_scale,
             color=[0, 1, 0, 1],
             thickness=self.line_thickness * self.scale,
-        )  
+        )
 
         with self.keyframes.lock:
             N_keyframes = len(self.keyframes)
@@ -191,10 +214,10 @@ class Window(WindowEvents):
                 )
         if self.show_curr_pointmap and self.states.get_mode() != Mode.INIT:
             if config["use_calib"]:
-                curr_frame.K = self.keyframes.get_intrinsics()
-            h, w = curr_frame.img_shape.flatten()
-            X = self.frame_X(curr_frame)
-            C = curr_frame.C.cpu().numpy().astype(np.float32)
+                reference_curr_frame.K = self.keyframes.get_intrinsics()
+            h, w = reference_curr_frame.img_shape.flatten()
+            X = self.frame_X(reference_curr_frame)
+            C = reference_curr_frame.C.cpu().numpy().astype(np.float32)
             if "curr" not in self.textures:
                 ptex = self.ctx.texture((w, h), 3, dtype="f4", alignment=4)
                 ctex = self.ctx.texture((w, h), 1, dtype="f4", alignment=4)
@@ -205,7 +228,7 @@ class Window(WindowEvents):
             ctex.write(C.tobytes())
             itex.write(depth2rgb(X[..., -1], colormap="turbo"))
             self.render_pointmap(
-                curr_frame.T_WC.cpu(),
+                reference_curr_frame.T_WC.cpu(),
                 w,
                 h,
                 ptex,
@@ -313,15 +336,20 @@ class Window(WindowEvents):
         imgui.spacing()
 
         gui_size = imgui.get_content_region_available()
-        scale = gui_size[0] / self.curr_img.texture.size[0]
+        scale = gui_size[0] / self.reference_curr_img.texture.size[0]
         scale = min(self.scale, scale)
         size = (
-            self.curr_img.texture.size[0] * scale,
-            self.curr_img.texture.size[1] * scale,
+            self.reference_curr_img.texture.size[0] * scale,
+            self.reference_curr_img.texture.size[1] * scale,
         )
         image_with_text(self.kf_img, size, "kf", same_line=False)
-        image_with_text(self.curr_img, size, "curr", same_line=False)
-
+        image_with_text(self.reference_curr_img, size, "curr", same_line=False)
+        # Now draw the rest of the current images.
+        for cam_id, img_obj in self.curr_imgs.items():
+            # Skip the reference camera because it was already drawn.
+            if cam_id == self.reference_camera_ID:
+                continue
+            image_with_text(img_obj, size, f"curr: Cam {cam_id}", same_line=False)
         imgui.end()
 
         if new_state != self.state:

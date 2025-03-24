@@ -11,8 +11,7 @@ import yaml
 from mast3r_slam.global_opt import FactorGraph
 
 from mast3r_slam.config import load_config, config, set_global_config
-from mast3r_slam.multicam_dataloader import load_multi_dataset
-from mast3r_slam.dataloader import load_dataset
+from mast3r_slam.dataloader import load_multi_dataset
 import mast3r_slam.evaluate as eval
 from mast3r_slam.frame import Mode, SharedKeyframes, SharedStates, create_frame
 from mast3r_slam.mast3r_utils import (
@@ -22,7 +21,7 @@ from mast3r_slam.mast3r_utils import (
 )
 from mast3r_slam.multiprocess_utils import new_queue, try_get_msg
 from mast3r_slam.tracker import FrameTracker
-from mast3r_slam.visualization import WindowMsg, run_visualization
+from mast3r_slam.visualization_multi import WindowMsg, run_visualization
 import torch.multiprocessing as mp
 
 
@@ -45,25 +44,25 @@ def relocalization(frame, keyframes, factor_graph, retrieval_database):
             n_kf = len(keyframes)
             kf_idx = list(kf_idx)  # convert to list
             frame_idx = [n_kf - 1] * len(kf_idx)
-            print(f"CAMERA {camera_id} RELOCALIZING against kf ", n_kf - 1, " and ", kf_idx)
+            print("RELOCALIZING against kf ", n_kf - 1, " and ", kf_idx)
             if factor_graph.add_factors(
                 frame_idx,
                 kf_idx,
                 config["reloc"]["min_match_frac"],
                 is_reloc=config["reloc"]["strict"],
-            ):
+            ): # Relocalization Successful!
                 retrieval_database.update(
                     frame,
                     add_after_query=True,
                     k=config["retrieval"]["k"],
                     min_thresh=config["retrieval"]["min_thresh"],
                 )
-                print(f"Success! Camera {camera_id} Relocalized")
+                print("Success! Relocalized")
                 successful_loop_closure = True
                 keyframes.T_WC[n_kf - 1] = keyframes.T_WC[kf_idx[0]].clone()
             else:
                 keyframes.pop_last()
-                print(f"Camera {camera_id} Failed to relocalize")
+                print("Failed to relocalize")
 
         if successful_loop_closure:
             if config["use_calib"]:
@@ -93,6 +92,16 @@ def run_backend(cfg, model, states, keyframes, K):
                 states.set_mode(Mode.TRACKING)
             states.dequeue_reloc()
             continue
+        # Handle relocalization for each camera
+        # for camera_id in range(config["multicamera"]["cameras"]):
+        #     camera_mode = states.get_mode(camera_id)
+        #     if camera_mode == Mode.RELOC:
+        #         frame = states.get_frame(camera_id)
+        #         success = relocalization(frame, keyframes, factor_graph, retrieval_database)
+        #         if success:
+        #             states.set_mode(Mode.TRACKING, camera_id)
+        #         states.dequeue_reloc()
+        #         continue
         idx = -1
         with states.lock:
             if len(states.global_optimizer_tasks) > 0:
@@ -155,8 +164,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset", default="datasets/tum/rgbd_dataset_freiburg1_desk")
-    parser.add_argument("--dataset2", default="")
-    parser.add_argument("--config", default="config/base.yaml")
+    parser.add_argument("--config", default="config/multicam.yaml")
     parser.add_argument("--save-as", default="default")
     parser.add_argument("--no-viz", action="store_true")
     parser.add_argument("--calib", default="")
@@ -169,28 +177,29 @@ if __name__ == "__main__":
     load_config(args.config)
     print(args.dataset)
     print(config)
+    multicam_config = config.get("multidataset", {})
+    
+    # Extract dataset identifiers (paths) and camera IDs
+    dataset_paths = []
+    camera_ids = []
+    for ds_conf in multicam_config['datasets']:
+        # Use the 'path' if provided; otherwise, use the 'id'
+        dataset_identifier = ds_conf.get('path', ds_conf.get('id'))
+        dataset_paths.append(dataset_identifier)
+        camera_ids.append(ds_conf['camera_id'])
+
+    # Use the camera_id of the first dataset as the reference (or set it differently if needed)
+    reference_camera_id = multicam_config['datasets'][0]['camera_id']
+
+    # Now call load_multi_dataset() with these arguments:
+    datasets = load_multi_dataset(dataset_paths, camera_ids, reference_camera_id)
 
     manager = mp.Manager()
     main2viz = new_queue(manager, args.no_viz)
     viz2main = new_queue(manager, args.no_viz)
 
-    dataset = load_dataset(args.dataset)
-
-
-    dataset.subsample(config["dataset"]["subsample"])
-    h, w = dataset.get_img_shape()[0]
-
-    if args.calib:
-        with open(args.calib, "r") as f:
-            intrinsics = yaml.load(f, Loader=yaml.SafeLoader)
-
-        dataset.use_calibration = True
-        dataset.camera_intrinsics = Intrinsics.from_calib(
-            dataset.img_size,
-            intrinsics["width"],
-            intrinsics["height"],
-            intrinsics["calibration"],
-        )
+    datasets.reference.subsample(config["dataset"]["subsample"])  # Use the reference dataset property
+    h, w = datasets.reference.get_img_shape()[0]  # Retrieve image shape from the reference dataset
 
     keyframes = SharedKeyframes(manager, h, w)
     states = SharedStates(manager, h, w)
@@ -205,28 +214,8 @@ if __name__ == "__main__":
     model = load_mast3r(device=device)
     model.share_memory()
 
-    has_calib = dataset.has_calib()
-    use_calib = config["use_calib"]
-
-    if use_calib and not has_calib:
-        print("[Warning] No calibration provided for this dataset!")
-        sys.exit(0)
     K = None
-    if use_calib:
-        K = torch.from_numpy(dataset.camera_intrinsics.K_frame).to(
-            device, dtype=torch.float32
-        )
-        keyframes.set_intrinsics(K)
 
-    # remove the trajectory from the previous run
-    if dataset.save_results:
-        save_dir, seq_name = eval.prepare_savedir(args, dataset)
-        traj_file = save_dir / f"{seq_name}.txt"
-        recon_file = save_dir / f"{seq_name}.ply"
-        if traj_file.exists():
-            traj_file.unlink()
-        if recon_file.exists():
-            recon_file.unlink()
 
     tracker = FrameTracker(model, keyframes, device)
     last_msg = WindowMsg()
@@ -236,55 +225,13 @@ if __name__ == "__main__":
 
     i = 0
     fps_timer = time.time()
-
     frames = []
-    
-    dataset2 = load_dataset(args.dataset2)
-    has_calib2 = dataset2.has_calib()
-    use_calib2 = config["use_calib"]
-    if use_calib2 and not has_calib2:
-        print("[Warning] No calibration provided for the second dataset!")
-        sys.exit(0)
-    K2 = None
-    if use_calib2:
-        K2 = torch.from_numpy(dataset2.camera_intrinsics.K_frame).to(
-            device, dtype=torch.float32
-        )
-        keyframes.set_intrinsics(K2)
 
-    if dataset2.save_results:
-        save_dir2, seq_name2 = eval.prepare_savedir(args, dataset2)
-        traj_file2 = save_dir2 / f"{seq_name2}.txt"
-        recon_file2 = save_dir2 / f"{seq_name2}.ply"
-        if traj_file2.exists():
-            traj_file2.unlink()
-        if recon_file2.exists():
-            recon_file2.unlink()
-    has_calib2 = dataset2.has_calib()
-    use_calib2 = config["use_calib"]
-
-    if use_calib2 and not has_calib2:
-        print("[Warning] No calibration provided for the second dataset!")
-        sys.exit(0)
-    K2 = None
-    if use_calib2:
-        K2 = torch.from_numpy(dataset2.camera_intrinsics.K_frame).to(
-            device, dtype=torch.float32
-        )
-        keyframes.set_intrinsics(K2)
-
-    if dataset2.save_results:
-        save_dir2, seq_name2 = eval.prepare_savedir(args, dataset2)
-        traj_file2 = save_dir2 / f"{seq_name2}.txt"
-        recon_file2 = save_dir2 / f"{seq_name2}.ply"
-        if traj_file2.exists():
-            traj_file2.unlink()
-        if recon_file2.exists():
-            recon_file2.unlink()
     while True:
         # The following variables are shared memory:
         # - keyframes: SharedKeyframes object that stores keyframe data
         # - states: SharedStates object that manages shared states and synchronization
+        
         mode = states.get_mode()
         msg = try_get_msg(viz2main)
         last_msg = msg if msg is not None else last_msg
@@ -300,56 +247,47 @@ if __name__ == "__main__":
         if not last_msg.is_paused:
             states.unpause()
 
-        if i == len(dataset):
+        if i == len(datasets):
             states.set_mode(Mode.TERMINATED)
             break
 
-        _, img = dataset[i]
-        timestamp, img2 = dataset2[i]
-        second_cam = timestamp > 10 # Wait until the first camera has generated enough keyframes (10 seconds threshold, adjustable)
+        _, refrenceimg = datasets.reference[i]
 
         if save_frames:
-            frames.append(img)
+            frames.append(refrenceimg)
 
         # get frames last camera pose
-        T_WC = (
+        referenceT_WC = (
             lietorch.Sim3.Identity(1, device=device)
             if i == 0
             else states.get_frame().T_WC
         )
-        frame = create_frame(i, img, T_WC, img_size=dataset.img_size, device=device)
-
-        if second_cam:
-            T_WC2 = (
-                lietorch.Sim3.Identity(1, device=device)
-                if i == 0# 무슨 조건 써야하지..
-                else states.get_frame().T_WC
-            )
-            frame2 = create_frame(i, img2, T_WC2, img_size=dataset2.img_size, device=device)
-
-
+        reference_frame = create_frame(i, refrenceimg, referenceT_WC, img_size=datasets.reference.img_size, device=device)
+        reference_camera_id = datasets.reference.camera_id
 
         if mode == Mode.INIT:
             # Initialize via mono inference, and encoded features neeed for database
-            X_init, C_init = mast3r_inference_mono(model, frame)
-            frame.update_pointmap(X_init, C_init)
-            keyframes.append(frame)
+            X_init, C_init = mast3r_inference_mono(model, reference_frame)
+            reference_frame.update_pointmap(X_init, C_init)
+            keyframes.append(reference_frame)
             states.queue_global_optimization(len(keyframes) - 1)
             states.set_mode(Mode.TRACKING)
-            states.set_frame(frame)
+            states.set_frame(reference_frame)
             i += 1
             continue
 
+            
+        # camera_mode = states.get_mode(reference_camera_id)
         if mode == Mode.TRACKING:
-            add_new_kf, match_info, try_reloc = tracker.track(frame) # frame.update_pointmap()
+            add_new_kf, match_info, try_reloc = tracker.track(reference_frame) # frame.update_pointmap()
             if try_reloc:
                 states.set_mode(Mode.RELOC)
-            states.set_frame(frame)
+            states.set_frame(reference_frame)
 
         elif mode == Mode.RELOC:
-            X, C = mast3r_inference_mono(model, frame)
-            frame.update_pointmap(X, C)
-            states.set_frame(frame)
+            X, C = mast3r_inference_mono(model, reference_frame)
+            reference_frame.update_pointmap(X, C)
+            states.set_frame(reference_frame)
             states.queue_reloc()
             # In single threaded mode, make sure relocalization happen for every frame
             while config["single_thread"]:
@@ -359,10 +297,10 @@ if __name__ == "__main__":
                 time.sleep(0.01)
 
         else:
-            raise Exception("Invalid mode")
+            raise Exception(f"Invalid mode for camera")
 
         if add_new_kf:
-            keyframes.append(frame)
+            keyframes.append(reference_frame)
             states.queue_global_optimization(len(keyframes) - 1)
             # In single threaded mode, wait for the backend to finish - written by GPT-40
             while config["single_thread"]:
@@ -376,25 +314,6 @@ if __name__ == "__main__":
             print(f"FPS: {FPS}")
         i += 1
 
-    if dataset.save_results:
-        save_dir, seq_name = eval.prepare_savedir(args, dataset)
-        eval.save_traj(save_dir, f"{seq_name}.txt", dataset.timestamps, keyframes)
-        eval.save_reconstruction(
-            save_dir,
-            f"{seq_name}.ply",
-            keyframes,
-            last_msg.C_conf_threshold,
-        )
-        eval.save_keyframes(
-            save_dir / "keyframes" / seq_name, dataset.timestamps, keyframes
-        )
-    if save_frames:
-        savedir = pathlib.Path(f"logs/frames/{datetime_now}")
-        savedir.mkdir(exist_ok=True, parents=True)
-        for i, frame in tqdm.tqdm(enumerate(frames), total=len(frames)):
-            frame = (frame * 255).clip(0, 255)
-            frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-            cv2.imwrite(f"{savedir}/{i}.png", frame)
 
     print("done")
     backend.join()

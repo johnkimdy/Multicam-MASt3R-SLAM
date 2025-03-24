@@ -1,6 +1,15 @@
 inherit: "config/base.yaml"
+multidataset:
+  datasets:
+    - id: "webcam"
+      camera_id: 0
+    - id: "phone_cam"
+      type: "android"
+      # path: "http://143.248.163.135:8080/video"
+      path: "http://143.248.162.115:4747/video"
+      camera_id: 1
 
-multicamera:
-  enabled: true
-  cameras: 2  # Number of cameras to use
-  initialize_all: false  # If true, all cameras initialize independently; if false, only first camera initializes world
+
+
+# Specify which camera is used as the reference for synchronization.
+reference_camera_id: 0
