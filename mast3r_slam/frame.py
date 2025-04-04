@@ -12,7 +12,8 @@ class Mode(Enum):
     TRACKING = 1
     RELOC = 2
     TERMINATED = 3
-
+    NONREF_INIT_RELOC = 4  # Non-reference camera initialization via relocalization
+    NONREF_INIT_COMPLETE = 5  # Non-reference camera initialization completed
 
 
 @dataclasses.dataclass
@@ -138,17 +139,20 @@ def create_frame(i, img, T_WC, img_size=512, device="cuda:0",cameraID=0):
 
 
 class SharedStates:
-    def __init__(self, manager, h, w, dtype=torch.float32, device="cuda",num_cams=1):
+    def __init__(self, manager, h, w, dtype=torch.float32, device="cuda",num_cams=1,reference_camera_id=0):
         self.h, self.w = h, w
         self.dtype = dtype
         self.device = device
         self.num_cams = num_cams
+        self.reference_camera_id  = 0
         self.lock = manager.RLock()
         self.paused = manager.Value("i", 0)
         self.mode = manager.Value("i", Mode.INIT)
-        # self.global_mode = manager.Value("i", Mode.INIT)
-        # Per-camera modes (array of shared values)
-        # self.camera_modes = [manager.Value("i", Mode.INIT) for _ in range(num_cams)]
+        # Create a list of shared mode values for each camera
+        self.camera_modes = manager.dict()
+        for i in range(num_cams):
+            self.camera_modes[i] = Mode.INIT
+
         self.num_cameras = num_cams
         self.reloc_sem = manager.Value("i", 0)
         self.global_optimizer_tasks = manager.list()
@@ -158,7 +162,7 @@ class SharedStates:
         self.feat_dim = 1024
         self.num_patches = h * w // (16 * 16)
 
-
+        
         # fmt:off
         self.dataset_idx = torch.zeros(num_cams, device=device, dtype=torch.int).share_memory_()
         self.img = torch.zeros(num_cams, 3, h, w, device=device, dtype=dtype).share_memory_()
@@ -188,7 +192,7 @@ class SharedStates:
             self.pos[camera_ID] = frame.pos
             self.N[camera_ID] = frame.N
 
-    def get_frame(self, camera_ID =0):
+    def get_frame(self, camera_ID =0):#1qazxsw2ktma!
         with self.lock:
             # put all of the data into a frame
             frame = Frame(
@@ -219,7 +223,6 @@ class SharedStates:
             if self.reloc_sem.value == 0:
                 return
             self.reloc_sem.value -= 1
-
     def get_mode(self):
         with self.lock:
             return self.mode.value
@@ -227,38 +230,14 @@ class SharedStates:
     def set_mode(self, mode):
         with self.lock:
             self.mode.value = mode
-
-    # def set_mode(self, mode, camera_id=None):
-    #     with self.lock:
-    #         if mode in [Mode.INIT, Mode.TERMINATED]:
-    #             self.global_mode.value = mode.value
-    #             # When setting global mode, reset all camera modes
-    #             for cam_mode in self.camera_modes:
-    #                 cam_mode.value = mode.value
-    #         else:
-    #             if camera_id is None:
-    #                 raise ValueError("Camera ID required for TRACKING and RELOC modes")
-    #             if camera_id >= self.num_cameras:
-    #                 raise ValueError(f"Camera ID {camera_id} out of range (0-{self.num_cameras-1})")
-    #             self.camera_modes[camera_id].value = mode.value
-
-    # def get_mode(self, camera_id=None):
-    #     with self.lock:
-    #         if camera_id is None:
-    #             return Mode(self.global_mode.value)
-    #         if self.global_mode.value in [Mode.INIT.value, Mode.TERMINATED.value]:
-    #             return Mode(self.global_mode.value)
-    #         return Mode(self.camera_modes[camera_id].value)
-
-    # def is_any_tracking(self):
-    #     with self.lock:
-    #         if self.global_mode.value in [Mode.INIT.value, Mode.TERMINATED.value]:
-    #             return False
-    #         return any(mode.value == Mode.TRACKING.value for mode in self.camera_modes)
-
-    # def are_all_terminated(self):
-    #     with self.lock:
-    #         return self.global_mode.value == Mode.TERMINATED.value
+            
+    def get_camera_mode(self, camera_ID=0):
+        with self.lock:
+            return self.camera_modes[camera_ID]
+            
+    def set_camera_mode(self, mode, camera_ID=0):
+        with self.lock:
+            self.camera_modes[camera_ID] = mode
 
     def pause(self):
         with self.lock:
@@ -301,6 +280,8 @@ class SharedKeyframes:
         self.pos = torch.zeros(buffer, 1, self.num_patches, 2, device=device, dtype=torch.long).share_memory_()
         self.is_dirty = torch.zeros(buffer, 1, device=device, dtype=torch.bool).share_memory_()
         self.K = torch.zeros(3, 3, device=device, dtype=dtype).share_memory_()
+        self.cam_id = torch.zeros(buffer, device=device, dtype=torch.int).share_memory_()
+        
         # fmt: on
 
     def __getitem__(self, idx) -> Frame:
@@ -313,6 +294,7 @@ class SharedKeyframes:
                 self.img_true_shape[idx],
                 self.uimg[idx],
                 lietorch.Sim3(self.T_WC[idx]),
+                camera_ID=self.cam_id[idx]
             )
             kf.X_canon = self.X[idx]
             kf.C = self.C[idx]
@@ -327,7 +309,9 @@ class SharedKeyframes:
     def __setitem__(self, idx, value: Frame) -> None:
         with self.lock:
             self.n_size.value = max(idx + 1, self.n_size.value)
-
+            # Store the original camera ID
+            
+            # print(f"Setting keyframe at index {idx} with camera ID: {value.camera_ID}")
             # set the attributes
             self.dataset_idx[idx] = value.frame_id
             self.img[idx] = value.img
@@ -342,6 +326,8 @@ class SharedKeyframes:
             self.N[idx] = value.N
             self.N_updates[idx] = value.N_updates
             self.is_dirty[idx] = True
+            # self.cam_id[idx]=value.camera_ID
+            self.cam_id[idx] = value.camera_ID
             return idx
 
     def __len__(self):
@@ -356,11 +342,19 @@ class SharedKeyframes:
         with self.lock:
             self.n_size.value -= 1
 
-    def last_keyframe(self) -> Optional[Frame]:
+    def last_keyframe(self,camid=0) -> Optional[Frame]:
         with self.lock:
             if self.n_size.value == 0:
                 return None
-            return self[self.n_size.value - 1]
+            
+            # Iterate backwards through keyframes to find the last one with matching camera ID
+            for i in range(self.n_size.value - 1, -1, -1):
+                frame = self[i]
+                if frame.camera_ID == camid:
+                    return frame, i
+            
+            # If no frame with matching camera ID is found, return None
+            return None
 
     def update_T_WCs(self, T_WCs, idx) -> None:
         with self.lock:

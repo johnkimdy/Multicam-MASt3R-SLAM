@@ -681,7 +681,7 @@ def load_dataset(dataset_path):
     if "android" in split_dataset_type:
         stream_url = config["stream_ip"]["android_ip"]
         return Android(stream_url)
-    if "replicamultiagent" in split_dataset_type:
+    if "ReplicaMultiagent" in split_dataset_type:
         return ReplicaMultiAgent(dataset_path)
     if "rtmp" in split_dataset_type:
         stream_url = config["stream_ip"]["rtmp_ip"]

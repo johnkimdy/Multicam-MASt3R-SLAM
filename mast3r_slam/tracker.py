@@ -26,7 +26,9 @@ class FrameTracker:
         self.idx_f2k = None
 
     def track(self, frame: Frame):
-        keyframe = self.keyframes.last_keyframe()
+        keyframe , last_idx= self.keyframes.last_keyframe(frame.camera_ID)
+        # Print keyframe with camera_ID to check if it's None
+        #print(f"[Tracker] Camera {frame.camera_ID} keyframe: {keyframe}")
 
         idx_f2k, valid_match_k, Xff, Cff, Qff, Xkf, Ckf, Qkf = mast3r_match_asymmetric(
             self.model, frame, keyframe, idx_i2j_init=self.idx_f2k
@@ -94,11 +96,18 @@ class FrameTracker:
 
         frame.T_WC = T_WCf # what is T_WC? John
 
+
+        # Before updating keyframe, store its camera ID
+        original_cam_id = keyframe.camera_ID
+
         # Use pose to transform points to update keyframe
         Xkk = T_CkCf.act(Xkf)
         keyframe.update_pointmap(Xkk, Ckf)
+
+        # Ensure camera ID is preserved
+        keyframe.camera_ID = original_cam_id
         # write back the fitered pointmap
-        self.keyframes[len(self.keyframes) - 1] = keyframe
+        self.keyframes[last_idx] = keyframe
 
         # Keyframe selection
         n_valid = valid_kf.sum()
@@ -169,7 +178,6 @@ class FrameTracker:
         tau_j = torch.cholesky_solve(g, L, upper=False).view(1, -1)
 
         return tau_j, cost
-
     def opt_pose_ray_dist_sim3(self, Xf, Xk, T_WCf, T_WCk, Qk, valid):
         last_error = 0
         sqrt_info_ray = 1 / self.cfg["sigma_ray"] * valid * torch.sqrt(Qk)

@@ -90,8 +90,10 @@ class Window(WindowEvents):
         self.textures = dict()
         self.mtime = self.pointmap_prog.extra["meta"].resolved_path.stat().st_mtime
         self.reference_curr_img, self.kf_img = Image(), Image()
-        if config["multicamera"]["enabled"]:
-            self.reference_camera_ID = config["multicamera"]["reference_id"]
+
+
+        if config["multidataset"]:
+            self.reference_camera_ID = config["multidataset"]["reference_camera_id"]
         else:
             self.reference_camera_ID = 0
         self.reference_curr_img_np, self.kf_img_np = None, None
@@ -116,7 +118,8 @@ class Window(WindowEvents):
         reference_curr_frame = self.states.get_frame(self.reference_camera_ID)
         h, w = reference_curr_frame.img_shape.flatten()
         self.frustums.make_frustum(h, w)
-        num_cameras = config["multicamera"]["cameras"] 
+        num_cameras = config["multidataset"]["number_of_camera"]
+        
         for i in range(num_cameras):
             # Skip updating the reference camera in this loop.
             if i == self.reference_camera_ID:
@@ -125,16 +128,26 @@ class Window(WindowEvents):
             # Retrieve the i-th frame from the state.
             frame = self.states.get_frame(i)
             if frame is not None:
-                # Convert frame.uimg to a numpy array and store it.
-                self.curr_imgs_np[i] = frame.uimg.numpy()
-                # Create an Image() object if one does not exist yet.
+                # 1) Convert frame.uimg to a NumPy array
+                arr = frame.uimg.numpy()
+                
+                # 2) Debug print: CPU image min/max
+                # 3) Store the CPU image
+                self.curr_imgs_np[i] = arr
+                
+                # 4) Create an Image() object if one does not exist yet
                 if i not in self.curr_imgs:
                     self.curr_imgs[i] = Image()
-                # Write the image data into the corresponding Image() object.
-                self.curr_imgs[i].write(self.curr_imgs_np[i])
+                
+                # 5) Write the image data into the corresponding Image() object
+                try:
+                    self.curr_imgs[i].write(self.curr_imgs_np[i])
+                except Exception as e:
+                    print(f"Error writing image for camera {i}: {str(e)}")
+
 
             # For the reference camera (assumed to be handled separately)
-        reference_curr_frame = self.states.get_frame(self.refrence_camera_ID)
+        reference_curr_frame = self.states.get_frame(self.reference_camera_ID)
         self.reference_curr_img_np = reference_curr_frame.uimg.numpy()
         self.reference_curr_img.write(self.reference_curr_img_np)
 
@@ -342,15 +355,30 @@ class Window(WindowEvents):
             self.reference_curr_img.texture.size[0] * scale,
             self.reference_curr_img.texture.size[1] * scale,
         )
+        
         image_with_text(self.kf_img, size, "kf", same_line=False)
+        
         image_with_text(self.reference_curr_img, size, "curr", same_line=False)
+
         # Now draw the rest of the current images.
         for cam_id, img_obj in self.curr_imgs.items():
             # Skip the reference camera because it was already drawn.
             if cam_id == self.reference_camera_ID:
                 continue
-            image_with_text(img_obj, size, f"curr: Cam {cam_id}", same_line=False)
+            
+            # Check if the Image object has a valid texture
+            if not hasattr(img_obj, 'texture') or img_obj.texture is None:
+                print(f"Camera {cam_id}: No valid texture or texture is None.")
+                continue
+            
+
+            # Attempt to draw the image
+            try:
+                image_with_text(img_obj, size, f"curr: Cam {cam_id}", same_line=False)
+            except Exception as e:
+                print(f"[DEBUG] Error drawing image for camera {cam_id}: {e}")
         imgui.end()
+
 
         if new_state != self.state:
             self.state = new_state

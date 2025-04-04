@@ -8,8 +8,10 @@ import lietorch
 import torch
 import tqdm
 import yaml
+import traceback
+import numpy as np
 from mast3r_slam.global_opt import FactorGraph
-
+from mast3r_slam.mast3r_utils import mast3r_match_asymmetric
 from mast3r_slam.config import load_config, config, set_global_config
 from mast3r_slam.dataloader import load_multi_dataset
 import mast3r_slam.evaluate as eval
@@ -23,7 +25,7 @@ from mast3r_slam.multiprocess_utils import new_queue, try_get_msg
 from mast3r_slam.tracker import FrameTracker
 from mast3r_slam.visualization_multi import WindowMsg, run_visualization
 import torch.multiprocessing as mp
-
+import matplotlib.pyplot as plt
 
 def relocalization(frame, keyframes, factor_graph, retrieval_database):
     # we are adding and then removing from the keyframe, so we need to be careful.
@@ -92,16 +94,7 @@ def run_backend(cfg, model, states, keyframes, K):
                 states.set_mode(Mode.TRACKING)
             states.dequeue_reloc()
             continue
-        # Handle relocalization for each camera
-        # for camera_id in range(config["multicamera"]["cameras"]):
-        #     camera_mode = states.get_mode(camera_id)
-        #     if camera_mode == Mode.RELOC:
-        #         frame = states.get_frame(camera_id)
-        #         success = relocalization(frame, keyframes, factor_graph, retrieval_database)
-        #         if success:
-        #             states.set_mode(Mode.TRACKING, camera_id)
-        #         states.dequeue_reloc()
-        #         continue
+
         idx = -1
         with states.lock:
             if len(states.global_optimizer_tasks) > 0:
@@ -153,6 +146,81 @@ def run_backend(cfg, model, states, keyframes, K):
                 idx = states.global_optimizer_tasks.pop(0)
 
 
+def test_per_camera_images(multi_dataset, num_frames=10):
+    """
+    Check a subset of frames from each camera (up to num_frames) using OpenCV
+    to verify that the image data is valid.
+
+    Args:
+        multi_dataset: A MultiDataset instance.
+        num_frames (int): The number of frames to check per camera.
+    """
+    import numpy as np
+
+    datasets_by_camera = multi_dataset.datasets_by_camera
+    for cam_id, ds in datasets_by_camera.items():
+        print(f"\n[Camera ID: {cam_id}]")
+        total_frames = len(ds)
+        frames_to_check = min(num_frames, total_frames)
+
+        for idx in range(frames_to_check):
+            timestamp, image = ds[idx]
+            if image is None:
+                print(f"  Frame {idx} at {timestamp}: No image data!")
+            else:
+                print(f"  Frame {idx} at {timestamp}: Image shape: {image.shape}")
+
+                # Check whether the entire image is made up of zeros
+                if np.all(image == 0):
+                    print("    -> This image is entirely zero pixels (black or transparent).")
+                else:
+                    print("    -> This image contains non-zero pixels.")
+
+                # Optional: Display the image briefly (uncomment if needed)
+                # import cv2
+                # cv2.imshow(f"Camera {cam_id}", image)
+                # cv2.waitKey(1)
+
+    # (Optional) Close any OpenCV windows after the loop
+    # cv2.destroyAllWindows()
+
+def run_backend_init_nonrefcam(cfg, model, states, keyframes, K):
+    """
+    이 backend는 non-reference 카메라의 초기화(INIT 모드)를 담당합니다.
+    reference 카메라는 메인 루프에서 tracking을 수행하므로, 여기서는 제외합니다.
+    """
+    set_global_config(cfg)
+    device = keyframes.device
+    retrieval_database = load_retriever(model)
+    factor_graph = FactorGraph(model, keyframes, K, device)
+    
+    # 주기적으로 non-reference 카메라의 상태를 체크
+    while states.get_mode() is not Mode.TERMINATED:
+        # states.camera_modes는 각 카메라의 현재 모드를 저장합니다.
+        # reference 카메라는 여기서 제외해야 합니다.
+        for cam_id in list(states.camera_modes.keys()):
+            # reference 카메라는 이미 메인 루프에서 처리되므로 건너뜁니다.
+            if cam_id == states.reference_camera_id:
+                continue
+            
+            if states.get_camera_mode(cam_id) == Mode.NONREF_INIT_RELOC:
+                try:
+                    # non-reference 카메라의 최신 프레임을 가져옵니다.
+                    frame = states.get_frame(cam_id)
+                    if frame is None:
+                        continue
+                    states.set_frame(frame, cam_id)
+                    states.set_camera_mode(Mode.NONREF_INIT_COMPLETE, cam_id)
+
+
+
+
+                    print(f"[Backend Non-Ref] Camera {cam_id} 초기화 성공!")
+                except Exception as e:
+                    print(f"[Backend Non-Ref] Camera {cam_id} 초기화 중 에러: {e}")
+
+
+        time.sleep(0.01)
 
 if __name__ == "__main__":
     mp.set_start_method("spawn")
@@ -164,7 +232,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset", default="datasets/tum/rgbd_dataset_freiburg1_desk")
-    parser.add_argument("--config", default="config/multicam.yaml")
+    parser.add_argument("--config", default="config/replicamultiagent.yaml")
     parser.add_argument("--save-as", default="default")
     parser.add_argument("--no-viz", action="store_true")
     parser.add_argument("--calib", default="")
@@ -193,7 +261,8 @@ if __name__ == "__main__":
 
     # Now call load_multi_dataset() with these arguments:
     datasets = load_multi_dataset(dataset_paths, camera_ids, reference_camera_id)
-
+    # 각 카메라별로 이미지 데이터 점검 (예: 각 카메라에서 첫 10프레임 확인)
+    test_per_camera_images(datasets, num_frames=10)
     manager = mp.Manager()
     main2viz = new_queue(manager, args.no_viz)
     viz2main = new_queue(manager, args.no_viz)
@@ -202,7 +271,7 @@ if __name__ == "__main__":
     h, w = datasets.reference.get_img_shape()[0]  # Retrieve image shape from the reference dataset
 
     keyframes = SharedKeyframes(manager, h, w)
-    states = SharedStates(manager, h, w)
+    states = SharedStates(manager, h, w, num_cams=len(multicam_config['datasets']),reference_camera_id=datasets.reference_camera_id)
 
     if not args.no_viz:
         viz = mp.Process(
@@ -226,6 +295,21 @@ if __name__ == "__main__":
     i = 0
     fps_timer = time.time()
     frames = []
+    # Print the length of the datasets
+    print(f"Total number of frames in the reference dataset: {len(datasets)}")
+    
+    # Print length of each individual dataset
+    for cam_id, dataset in datasets.datasets_by_camera.items():
+        print(f"Camera {cam_id} dataset length: {len(dataset)}")
+    
+    # Print reference camera ID for confirmation
+    print(f"Reference camera ID: {datasets.reference_camera_id}")
+
+    # 새로운 backend: non-reference 카메라 초기화 전용
+    backend_init_nonrefcam = mp.Process(
+        target=run_backend_init_nonrefcam, args=(config, model, states, keyframes, K)
+    )
+    backend_init_nonrefcam.start()
 
     while True:
         # The following variables are shared memory:
@@ -260,7 +344,7 @@ if __name__ == "__main__":
         referenceT_WC = (
             lietorch.Sim3.Identity(1, device=device)
             if i == 0
-            else states.get_frame().T_WC
+            else states.get_frame(reference_camera_id).T_WC
         )
         reference_frame = create_frame(i, refrenceimg, referenceT_WC, img_size=datasets.reference.img_size, device=device)
         reference_camera_id = datasets.reference.camera_id
@@ -270,52 +354,207 @@ if __name__ == "__main__":
             X_init, C_init = mast3r_inference_mono(model, reference_frame)
             reference_frame.update_pointmap(X_init, C_init)
             keyframes.append(reference_frame)
+            # Print camera IDs in a more informative way
+            print(f"Camera IDs in keyframes: {keyframes.cam_id[:len(keyframes)]}")
             states.queue_global_optimization(len(keyframes) - 1)
             states.set_mode(Mode.TRACKING)
-            states.set_frame(reference_frame)
+            states.set_frame(reference_frame,reference_camera_id)
+
             i += 1
             continue
 
             
         # camera_mode = states.get_mode(reference_camera_id)
         if mode == Mode.TRACKING:
+            # print(f"(New Key frame Tracking Befor Tracking) Camera IDs in keyframes: {keyframes.cam_id[:len(keyframes)]}")
             add_new_kf, match_info, try_reloc = tracker.track(reference_frame) # frame.update_pointmap()
+            # print(f"(New Key frame Tracking) Camera IDs in keyframes: {keyframes.cam_id[:len(keyframes)]}")
+
             if try_reloc:
                 states.set_mode(Mode.RELOC)
-            states.set_frame(reference_frame)
+            states.set_frame(reference_frame, reference_camera_id)
+            if add_new_kf:
+                keyframes.append(reference_frame)
+                states.queue_global_optimization(len(keyframes) - 1)
+                # In single threaded mode, wait for the backend to finish - written by GPT-40
+                while config["single_thread"]:
+                    with states.lock:
+                        if len(states.global_optimizer_tasks) == 0:
+                            break
+                    time.sleep(0.01)
 
         elif mode == Mode.RELOC:
+            # Process reference camera relocalization
             X, C = mast3r_inference_mono(model, reference_frame)
             reference_frame.update_pointmap(X, C)
-            states.set_frame(reference_frame)
+            states.set_frame(reference_frame, reference_camera_id)
             states.queue_reloc()
+
+        else:
+            raise Exception(f"Invalid mode for camera")   
+        # log time
+        if i % 30 == 0:
+            FPS = i / (time.time() - fps_timer)
+            print(f"FPS: {FPS}")
+        i += 1
+ 
+              # Process other cameras in tracking mode
+        for cam_id, ds in datasets.datasets_by_camera.items():
+            if cam_id == reference_camera_id:
+                continue  # Skip reference camera as it's already processed
+            
+            # Check if this camera is in tracking mode
+            cam_mode = states.get_camera_mode(cam_id)
+                                # First create a frame for this camera
+            cam_T_WC = lietorch.Sim3.Identity(1, device=device)
+            # Get the image size for this camera
+
+            # Create frame for this camera
+            _, cam_img = ds[i]
+            cam_frame = create_frame(
+                i,
+                cam_img,
+                cam_T_WC,
+                img_size=ds.img_size,
+                device=device,
+                cameraID=cam_id
+            )
+
+            if cam_mode == Mode.INIT and i < len(ds):
+                try:
+                    # Get the frame for this camera
+                   
+                    
+                    # Check if we have at least one keyframe from the reference camera
+
+                    keyframe,_ = keyframes.last_keyframe()# The first image
+
+                    X_init, C_init = mast3r_inference_mono(model, cam_frame)
+                    cam_frame.update_pointmap(X_init, C_init)
+                    # Now match the camera frame with the reference keyframe
+                    idx_f2k, valid_match_k, Xff, Cff, Qff, Xkf, Ckf, Qkf = mast3r_match_asymmetric(
+                        model, cam_frame, keyframe
+                    )
+                    use_calib = config["use_calib"]
+                    Qk = torch.sqrt(Qff[idx_f2k] * Qkf)
+                    print(f"[Debug] Qk shape: {Qk.shape}, min: {Qk.min().item()}, max: {Qk.max().item()}")
+ 
+                    # Get rid of batch dim
+                    idx_f2k = idx_f2k[0]
+                    valid_match_k = valid_match_k[0]
+                    print(f"[Debug] idx_f2k shape: {idx_f2k.shape}, valid_match_k shape: {valid_match_k.shape}")
+                    
+                    Xf, Xk, T_WCf, T_WCk, Cf, Ck, meas_k, valid_meas_k = tracker.get_points_poses(cam_frame, keyframe, idx_f2k, ds.img_size, use_calib, K=None)
+                    print(f"[Debug] Xf shape: {Xf.shape}, Xk shape: {Xk.shape}")
+                    print(f"[Debug] T_WCf: {T_WCf.data}, T_WCk: {T_WCk.data}")
+                    print(f"[Debug] Cf shape: {Cf.shape}, Ck shape: {Ck.shape}")
+                    
+                    # Use canonical confidence average
+                    
+                    # Fix tensor shapes based on debug output
+                    # From debug: valid_match_k shape: torch.Size([147456, 1])
+                    valid_match_k = valid_match_k.squeeze(-1)  # Convert from [147456, 1] to [147456]
+                    
+                    # Ensure confidence tensors are properly shaped
+                    valid_Cf = Cf > config["tracking"]["C_conf"]
+                    valid_Ck = Ck > config["tracking"]["C_conf"]
+                    valid_Q = Qk > config["tracking"]["Q_conf"]
+                    
+                    # Squeeze all tensors to ensure they're 1D for boolean operations
+                    valid_Cf = valid_Cf.squeeze(-1)
+                    valid_Ck = valid_Ck.squeeze(-1)
+                    valid_Q = valid_Q.squeeze(-1)
+                    
+                    # Combine all validity criteria
+                    valid_opt = valid_match_k & valid_Cf & valid_Ck & valid_Q
+                    
+                    # Calculate match fraction for debugging
+                    match_frac = valid_opt.sum() / valid_opt.numel()
+                    print(f"[Debug] valid_opt shape: {valid_opt.shape}")
+                    print(f"[Debug] valid_opt sum: {valid_opt.sum().item()}/{valid_opt.numel()} ({match_frac*100:.2f}%)")
+                    # # Track
+                    # if not use_calib:
+                    #     # Reshape valid_opt to match expected shape [n_points]
+                    #     # The error shows valid mask shape torch.Size([1, 147456, 1]) doesn't match points 147456
+                    #     # So we need to ensure valid_opt is exactly [147456] without batch dimension
+                    #     valid_opt_reshaped = valid_opt.view(-1)  # Flatten to ensure it's [n_points]
+                        
+                    #     # Reshape Qk to match expected shape [n_points, 1] instead of [1, n_points, 1]
+                    #     Qk_reshaped = Qk.squeeze(0)  # Remove batch dimension
+                        
+                    #     T_WCf, T_CkCf = tracker.opt_pose_ray_dist_sim3(
+                    #         Xf, Xk, T_WCf, T_WCk, Qk_reshaped, valid_opt_reshaped
+                    #     )
+
+                    # Update camera frame pointmap
+                    cam_frame.update_pointmap(Xff, Cff)
+                    cam_frame.T_WC = T_WCf
+                    # Store the frame in states
+                    states.set_frame(cam_frame, cam_id)
+                    states.set_camera_mode(Mode.TRACKING,cam_id)
+                    keyframes.append(cam_frame)
+                    print(f"Camera IDs in keyframes: {keyframes.cam_id[:len(keyframes)]}")
+                    if len(keyframes) > 20:
+                        # Set the camera mode to RELOC since we have keyframes to relocalize against
+                        states.set_camera_mode(Mode.NONREF_INIT_RELOC, cam_id)
+                        print(f"[Init] Camera {cam_id} set to RELOC mode")
+                    else:
+                        print(f"[Init] Camera {cam_id} waiting for reference keyframes")
+                except Exception as e:
+                    traceback_str = traceback.format_exc()
+                    print(f"[Init Error] Failed to initialize camera {cam_id}: {e}")
+                    print(f"[Init Error] Traceback:\n{traceback_str}")
+                
+                continue
+
+
+            if cam_mode == Mode.TRACKING and i < len(ds):
+                try:
+                    _, cam_img = ds[i]
+                    
+                    # Track this camera
+                    cam_add_new_kf, cam_match_info, cam_try_reloc = tracker.track(cam_frame)
+                    if cam_try_reloc:
+                        states.set_camera_mode(Mode.RELOC, cam_id)
+                    states.set_frame(cam_frame, cam_id)
+                    
+                    # If this camera needs a new keyframe, add it
+                    if cam_add_new_kf:
+                        keyframes.append(cam_frame)
+                        print(f"(Tracking non ref)Camera IDs in keyframes: {keyframes.cam_id[:len(keyframes)]}")
+                        states.queue_global_optimization(len(keyframes) - 1)
+                except Exception as e:
+                    #print(f"[Tracking Error] Failed to track camera {cam_id}: {e}")
+                    traceback_str = traceback.format_exc()
+                    #print(f"[Tracking Error] Traceback:\n{traceback_str}")
+        # Process other cameras in relocalization mode
+            # Check if this camera is in relocalization mode
+            if cam_mode == Mode.RELOC and i < len(ds):
+                try:
+                    # Get the frame for this camera
+                    cam_frame = states.get_frame(cam_id)
+                    if cam_frame is not None:
+                        # Perform relocalization for this camera
+                        cam_X, cam_C = mast3r_inference_mono(model, cam_frame)
+                        cam_frame.update_pointmap(cam_X, cam_C)
+                        states.set_frame(cam_frame, cam_id)
+                        print(f"[Relocalization] Processed camera {cam_id}")
+                except Exception as e:
+                    print(f"[Relocalization Error] Failed to relocalize camera {cam_id}: {e}")
+            
             # In single threaded mode, make sure relocalization happen for every frame
             while config["single_thread"]:
                 with states.lock:
                     if states.reloc_sem.value == 0:
                         break
                 time.sleep(0.01)
+            # log time
 
-        else:
-            raise Exception(f"Invalid mode for camera")
 
-        if add_new_kf:
-            keyframes.append(reference_frame)
-            states.queue_global_optimization(len(keyframes) - 1)
-            # In single threaded mode, wait for the backend to finish - written by GPT-40
-            while config["single_thread"]:
-                with states.lock:
-                    if len(states.global_optimizer_tasks) == 0:
-                        break
-                time.sleep(0.01)
-        # log time
-        if i % 30 == 0:
-            FPS = i / (time.time() - fps_timer)
-            print(f"FPS: {FPS}")
-        i += 1
 
 
     print("done")
     backend.join()
+    backend_init_nonrefcam.join()
     if not args.no_viz:
         viz.join()
