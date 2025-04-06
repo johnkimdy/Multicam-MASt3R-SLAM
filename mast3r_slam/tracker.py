@@ -70,6 +70,8 @@ class FrameTracker:
         if match_frac < self.cfg["min_match_frac"]:
             print(f"Skipped frame {frame.frame_id}")
             return False, [], True
+        # Print shape of valid_opt
+        # Print shape of Qk and valid_opt
 
         try:
             # Track
@@ -180,8 +182,17 @@ class FrameTracker:
         return tau_j, cost
     def opt_pose_ray_dist_sim3(self, Xf, Xk, T_WCf, T_WCk, Qk, valid):
         last_error = 0
+        # Print shapes of valid and Qk for debugging
+
+        
+        # Check if valid is properly formatted for the optimization
+
         sqrt_info_ray = 1 / self.cfg["sigma_ray"] * valid * torch.sqrt(Qk)
         sqrt_info_dist = 1 / self.cfg["sigma_dist"] * valid * torch.sqrt(Qk)
+        
+        # Print shapes of all variables for debugging
+
+        
         sqrt_info = torch.cat((sqrt_info_ray.repeat(1, 3), sqrt_info_dist), dim=1)
 
         # Solving for relative pose without scale!

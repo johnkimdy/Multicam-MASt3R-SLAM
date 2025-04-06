@@ -437,18 +437,14 @@ if __name__ == "__main__":
                     )
                     use_calib = config["use_calib"]
                     Qk = torch.sqrt(Qff[idx_f2k] * Qkf)
-                    print(f"[Debug] Qk shape: {Qk.shape}, min: {Qk.min().item()}, max: {Qk.max().item()}")
- 
+
                     # Get rid of batch dim
+                    
                     idx_f2k = idx_f2k[0]
                     valid_match_k = valid_match_k[0]
-                    print(f"[Debug] idx_f2k shape: {idx_f2k.shape}, valid_match_k shape: {valid_match_k.shape}")
-                    
+    
                     Xf, Xk, T_WCf, T_WCk, Cf, Ck, meas_k, valid_meas_k = tracker.get_points_poses(cam_frame, keyframe, idx_f2k, ds.img_size, use_calib, K=None)
-                    print(f"[Debug] Xf shape: {Xf.shape}, Xk shape: {Xk.shape}")
-                    print(f"[Debug] T_WCf: {T_WCf.data}, T_WCk: {T_WCk.data}")
-                    print(f"[Debug] Cf shape: {Cf.shape}, Ck shape: {Ck.shape}")
-                    
+
                     # Use canonical confidence average
                     
                     # Fix tensor shapes based on debug output
@@ -472,19 +468,27 @@ if __name__ == "__main__":
                     match_frac = valid_opt.sum() / valid_opt.numel()
                     print(f"[Debug] valid_opt shape: {valid_opt.shape}")
                     print(f"[Debug] valid_opt sum: {valid_opt.sum().item()}/{valid_opt.numel()} ({match_frac*100:.2f}%)")
-                    # # Track
-                    # if not use_calib:
-                    #     # Reshape valid_opt to match expected shape [n_points]
-                    #     # The error shows valid mask shape torch.Size([1, 147456, 1]) doesn't match points 147456
-                    #     # So we need to ensure valid_opt is exactly [147456] without batch dimension
-                    #     valid_opt_reshaped = valid_opt.view(-1)  # Flatten to ensure it's [n_points]
+                    # Looking at the debug output, valid_opt might need reshaping
+                    # [Debug] valid_opt shape: torch.Size([1, 147456])
+                    # [Debug] valid_opt sum: 30660/147456 (20.79%)
+                    
+                    # Ensure valid_opt has the right shape for the optimization function
+                    # Based on the tracker.opt_pose_ray_dist_sim3 function, valid_opt should be properly shaped
+                    if valid_opt.dim() > 1:
+                        # Reshape valid_opt to match expected shape
+                        valid_opt = valid_opt.view(-1, 1)  # Reshape to ensure it's [n_points, 1]
+                    elif valid_opt.dim() == 1:
+                        # If it's already 1D, add the second dimension
+                        valid_opt = valid_opt.view(-1, 1)  # Reshape from [n_points] to [n_points, 1]
+                    
+                   # # Track
+                    if not use_calib:
+                        # Reshape Qk to match expected shape [n_points, 1] instead of [1, n_points, 1]
+                        Qk = Qk[0] # Remove batch dimension
                         
-                    #     # Reshape Qk to match expected shape [n_points, 1] instead of [1, n_points, 1]
-                    #     Qk_reshaped = Qk.squeeze(0)  # Remove batch dimension
-                        
-                    #     T_WCf, T_CkCf = tracker.opt_pose_ray_dist_sim3(
-                    #         Xf, Xk, T_WCf, T_WCk, Qk_reshaped, valid_opt_reshaped
-                    #     )
+                        T_WCf, T_CkCf = tracker.opt_pose_ray_dist_sim3(
+                            Xf, Xk, T_WCf, T_WCk, Qk, valid_opt
+                        )
 
                     # Update camera frame pointmap
                     cam_frame.update_pointmap(Xff, Cff)
