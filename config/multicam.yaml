@@ -1,0 +1,22 @@
+inherit: "config/base.yaml"
+multidataset:
+  datasets:
+    - id: "webcam"
+      type: "webcam"
+      camera_id: 0
+
+    - id: "iphone"
+      type: "iphone"
+      path: "your/ip/path"
+      camera_id: 1
+
+  urls:
+    iphone_path: "your/ip/path"
+    android_path: "your/ip/path"
+
+
+
+
+# Specify which camera is used as the reference for synchronization.
+  reference_camera_id: 0
+  number_of_camera: 2

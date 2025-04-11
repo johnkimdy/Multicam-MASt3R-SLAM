@@ -1,0 +1,23 @@
+inherit: "config/base.yaml"
+multidataset:
+  datasets:
+    - id: "MultiAgentJPG"
+      path: "path/to/data"
+      camera_id: 0
+    # - id: "MultiAgentJPG"
+    #   path: "path/to/data"
+    #   camera_id: 1
+    - id: "MultiAgentJPG"
+      path: "path/to/data"
+      camera_id: 1
+    
+# Specify which camera is used as the reference for synchronization.
+  reference_camera_id: 0 #TODO..
+  number_of_camera: 2
+
+dataset:
+  subsample: 1  
+  img_downsample: 1
+  center_principle_point: True
+
+

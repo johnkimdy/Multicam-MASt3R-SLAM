@@ -1,0 +1,17 @@
+inherit: "config/base.yaml"
+multidataset:
+  datasets:
+    - id: "MultiAgentJPG"
+      path: "/media/research/DataStrorage/johnk/data/MultiAgentJPG/Apart-2/apart_2_part1/results"
+      camera_id: 0
+    - id: "MultiAgentJPG"
+      # type: "android"
+      # path: "http://143.248.163.135:8080/video"
+      path: "/media/research/DataStrorage/johnk/data/MultiAgentJPG/Apart-2/apart_2_part2_reversed/results"
+      camera_id: 1
+
+
+
+# Specify which camera is used as the reference for synchronization.
+  reference_camera_id: 0 #TODO..
+  number_of_camera: 2

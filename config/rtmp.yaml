@@ -1,0 +1,25 @@
+inherit: "config/base.yaml"
+
+use_calib: False
+single_thread: False
+dataset:
+  subsample: 1
+  img_downsample: 1
+  center_principle_point: True
+  img_size: 512  # Ensure consistent image size
+
+tracking:
+  min_match_frac: 0.05
+  filtering_mode: recent  # Use most recent point map for streaming data
+
+# RTMP specific options
+rtmp:
+  retry_interval: 5  # Seconds between retry attempts
+  max_retries: 10    # Maximum number of retry attempts
+  fallback_color: [0, 0, 0]  # Black background for fallback frames
+  expected_width: 512  # Expected frame width
+  expected_height: 512  # Expected frame height
+  crop_factor: 0.55  # Crop to 60% of the center area
+  buffer_size: 1  # Minimize latency
+  frame_skip: 2  # Process every 2nd frame when behind
+  use_threading: true  # Use background thread for capture 
