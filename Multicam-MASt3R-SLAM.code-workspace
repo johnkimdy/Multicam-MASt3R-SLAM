@@ -1,0 +1,12 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"name": "VINS-Mono",
+			"path": "../../../changyungjin/vins/VINS-Mono"
+		}
+	],
+	"settings": {}
+}

@@ -1,0 +1,18 @@
+inherit: "config/base.yaml"
+multidataset:
+  datasets:
+    - id: "MultiAgentJPG"
+      path: "/media/research/DataStrorage/johnk/data/jun.mp4"
+      camera_id: 0
+
+    
+# Specify which camera is used as the reference for synchronization.
+  reference_camera_id: 0 #TODO..
+  number_of_camera: 1
+
+dataset:
+  subsample: 1  
+  img_downsample: 1
+  center_principle_point: True
+
+
