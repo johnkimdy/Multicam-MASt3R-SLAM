@@ -1,8 +1,8 @@
 inherit: "config/base.yaml"
 multidataset:
   datasets:
-    - id: "MP4"
-      path: "/media/research/DataStrorage/johnk/data/jun.mp4"
+    - id: "youtube"
+      path: "https://youtu.be/hXD8itTKdY0?si=CHw3krHQDCkykPue"
       camera_id: 0
 
     

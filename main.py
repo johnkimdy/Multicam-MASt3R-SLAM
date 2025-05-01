@@ -267,7 +267,16 @@ if __name__ == "__main__":
     camera_ids = []
     for ds_conf in multicam_config['datasets']:
         # Use the 'path' if provided; otherwise, use the 'id'
-        dataset_identifier = ds_conf.get('path', ds_conf.get('id'))
+        if 'path' in ds_conf:
+            if ds_conf.get('id') == 'MultiAgentJPG':
+                dataset_identifier = ds_conf.get('path', ds_conf.get('id'))
+            else:
+                dataset_identifier = [ds_conf.get('id'), ds_conf.get('path')]
+        # if 'path' in ds_conf and ds_conf.get('id') == 'MultiAgentJPG':
+        #     dataset_identifier = ds_conf.get('path', ds_conf.get('id'))
+        else:
+            dataset_identifier = ds_conf.get('id')
+        print("dataset_identifier: ", dataset_identifier)
         dataset_paths.append(dataset_identifier)
         camera_ids.append(ds_conf['camera_id'])
 
@@ -275,7 +284,7 @@ if __name__ == "__main__":
     reference_camera_id = multicam_config['datasets'][0]['camera_id']
 
     # Now call load_multi_dataset() with these arguments:
-    print(f"{dataset_paths}")
+    print("Dataset Paths: ", f"{dataset_paths}")
     datasets = load_multi_dataset(dataset_paths, camera_ids, reference_camera_id)
     # 각 카메라별로 이미지 데이터 점검 (예: 각 카메라에서 첫 10프레임 확인)
     test_per_camera_images(datasets, num_frames=10)
@@ -412,12 +421,13 @@ if __name__ == "__main__":
 
         else:
             raise Exception(f"Invalid mode for camera")   
+        
         # log time
         if i % 30 == 0:
             FPS = i / (time.time() - fps_timer)
             print(f"FPS: {FPS}")
                
-              # Process other cameras in tracking mode
+        # Process other cameras in tracking mode
         for cam_id, ds in datasets.datasets_by_camera.items():
             if cam_id == reference_camera_id:
                 continue  # Skip reference camera as it's already processed

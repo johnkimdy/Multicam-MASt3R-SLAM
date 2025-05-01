@@ -109,7 +109,7 @@ python main.py --config config/multicam_munji_tables.yaml
 
 
 ## Reproducibility
-There might be minor differences between the released version and the results in the paper after developing this multi-processing version. 
+There might be minor differences between the rele`a`sed version and the results in the paper after developing this multi-processing version. 
 We run all our experiments on an RTX 3090, and the performance may differ when running with a different GPU.
 
 ## Acknowledgement

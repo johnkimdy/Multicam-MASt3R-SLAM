@@ -20,6 +20,7 @@ try:
     from torchcodec.decoders import VideoDecoder
 except Exception as e:
     HAS_TORCHCODEC = False
+# AS_TORCHCODEC = False
 def initialize_camera(max_index=10):
     for index in range(0,max_index):
         cap = cv2.VideoCapture(index)
@@ -323,12 +324,16 @@ class MP4Dataset(MonocularDataset):
         if HAS_TORCHCODEC:
             self.decoder = VideoDecoder(str(self.dataset_path))
             self.fps = self.decoder.metadata.average_fps
+            # self.fps = 60
             self.total_frames = self.decoder.metadata.num_frames
         else:
             print("torchcodec is not installed. This may slow down the dataloader")
             self.cap = cv2.VideoCapture(str(self.dataset_path))
             self.fps = self.cap.get(cv2.CAP_PROP_FPS)
+            # self.fps = 60
             self.total_frames = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        
+        print("self fps: ",self.fps)
 
         self.stride = config["dataset"]["subsample"]
 
@@ -405,6 +410,45 @@ class Intrinsics:
 
 
 
+# class YouTubeStreamDataset(MonocularDataset):
+#     def __init__(self, url):
+#         super().__init__()
+#         self.url = url
+#         self.dataset_path = None
+#         self.use_calibration = False
+#         self.save_results = False
+#         print(f"YouTubeStreamDataset initialized with URL: {url}")
+#         stream_url = self.get_stream_url(url)
+#         if stream_url is None:
+#             raise ValueError("Failed to get stream URL")
+#         self.cap = cv2.VideoCapture(stream_url, cv2.CAP_GSTREAMER)
+#         self.timestamps = []
+
+#     def get_stream_url(self, youtube_url):
+#         # yt-dlp 옵션 설정: 가장 좋은 화질의 비디오를 선택
+#         ydl_opts = {
+#             'format': 'bestvideo',
+#             'quiet': True,  # 콘솔 출력 최소화
+#         }
+#         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+#             info_dict = ydl.extract_info(youtube_url, download=False)
+#             stream_url = info_dict.get('url', None)
+#         return stream_url
+
+#     def __len__(self):
+#         return 999999
+
+#     def get_timestamp(self, idx):
+#         return self.timestamps[idx]
+
+#     def read_img(self, idx):
+#         ret, img = self.cap.read()
+#         if not ret:
+#             raise ValueError("Failed to read image")
+#         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+#         self.timestamps.append(idx / 30)
+#         return img
+
 class YouTubeStreamDataset(MonocularDataset):
     def __init__(self, url):
         super().__init__()
@@ -412,37 +456,184 @@ class YouTubeStreamDataset(MonocularDataset):
         self.dataset_path = None
         self.use_calibration = False
         self.save_results = False
+        self.timestamps = []
+        self.last_frame = None
+        self.frame_index = 0
+        
         print(f"YouTubeStreamDataset initialized with URL: {url}")
+        
+        # Try multiple formats to get a working stream
         stream_url = self.get_stream_url(url)
         if stream_url is None:
             raise ValueError("Failed to get stream URL")
+            
+        # Try different approaches to open the stream
+        self.cap = None
+        self.use_torchcodec = False
+        
+        # First try OpenCV
+        print("Trying to open stream with OpenCV...")
         self.cap = cv2.VideoCapture(stream_url)
-        self.timestamps = []
-
+        if not self.cap.isOpened():
+            print("Failed to open with standard OpenCV, trying with GSTREAMER...")
+            # Try with GStreamer if available
+            self.cap = cv2.VideoCapture(stream_url, cv2.CAP_GSTREAMER)
+            
+        # If still not working, try downloading a small segment
+        if not self.cap.isOpened():
+            print("Failed with OpenCV, trying to download a temporary file...")
+            temp_file = self.download_temp_segment(url)
+            if temp_file:
+                print(f"Downloaded temp file: {temp_file}")
+                if HAS_TORCHCODEC:
+                    try:
+                        self.decoder = VideoDecoder(temp_file)
+                        self.use_torchcodec = True
+                        print("Using torchcodec on downloaded segment")
+                    except Exception as e:
+                        print(f"Torchcodec failed: {e}")
+                        self.cap = cv2.VideoCapture(temp_file)
+                else:
+                    self.cap = cv2.VideoCapture(temp_file)
+                
+        # Get FPS
+        self.fps = 30.0  # Default fallback
+        if self.use_torchcodec:
+            try:
+                self.fps = self.decoder.metadata.average_fps
+                print(f"Torchcodec stream FPS: {self.fps}")
+            except:
+                pass
+        elif self.cap and self.cap.isOpened():
+            fps = self.cap.get(cv2.CAP_PROP_FPS)
+            if fps > 0 and fps < 100:
+                self.fps = fps
+            print(f"OpenCV stream FPS: {self.fps}")
+            
+        # Try to get first frame to make sure everything works
+        self.get_test_frame()
+            
     def get_stream_url(self, youtube_url):
-        # yt-dlp 옵션 설정: 가장 좋은 화질의 비디오를 선택
-        ydl_opts = {
-            'format': 'bestvideo',
-            'quiet': True,  # 콘솔 출력 최소화
-        }
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info_dict = ydl.extract_info(youtube_url, download=False)
-            stream_url = info_dict.get('url', None)
-        return stream_url
-
+        """Get direct stream URL from YouTube using yt-dlp"""
+        formats_to_try = [
+            'bestvideo[height<=1080][vcodec!*=av01]+bestaudio/best[height<=1080][vcodec!*=av01]',
+            'bestvideo[height<=720][vcodec!*=av01]+bestaudio/best[height<=720][vcodec!*=av01]',
+            'best[height<=720]',
+            'best[height<=480]',
+            'worst'  # Last resort
+        ]
+        
+        for format_str in formats_to_try:
+            try:
+                ydl_opts = {
+                    'format': format_str,
+                    'quiet': True,
+                }
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info_dict = ydl.extract_info(youtube_url, download=False)
+                    if 'url' in info_dict:
+                        print(f"Found stream URL with format: {format_str}")
+                        return info_dict['url']
+            except Exception as e:
+                print(f"Error with format {format_str}: {e}")
+                continue
+                
+        print("All format attempts failed")
+        return None
+        
+    def download_temp_segment(self, youtube_url):
+        """Download a short segment of the video to a temporary file"""
+        import tempfile
+        try:
+            # Create a temporary file
+            fd, temp_path = tempfile.mkstemp(suffix='.mp4')
+            os.close(fd)
+            
+            ydl_opts = {
+                'format': 'best[height<=480]',
+                'quiet': True,
+                'outtmpl': temp_path,
+                'max_filesize': '10M',  # Limit size to 10MB
+                'force_generic_extractor': True,
+            }
+            
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([youtube_url])
+                
+            return temp_path
+        except Exception as e:
+            print(f"Failed to download temp segment: {e}")
+            return None
+            
+    def get_test_frame(self):
+        """Try to read a test frame to validate the stream"""
+        try:
+            if self.use_torchcodec:
+                img = self.decoder[0]
+                img = img.permute(1, 2, 0).numpy()
+                self.last_frame = img
+                print("Successfully read first frame with torchcodec")
+                return True
+            elif self.cap and self.cap.isOpened():
+                ret, frame = self.cap.read()
+                if ret:
+                    self.last_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    print("Successfully read first frame with OpenCV")
+                    return True
+            print("Failed to read test frame")
+            return False
+        except Exception as e:
+            print(f"Error reading test frame: {e}")
+            return False
+            
     def __len__(self):
         return 999999
-
+        
     def get_timestamp(self, idx):
-        return self.timestamps[idx]
-
+        if idx < len(self.timestamps):
+            return self.timestamps[idx]
+        timestamp = idx / self.fps
+        self.timestamps.append(timestamp)
+        return timestamp
+        
     def read_img(self, idx):
-        ret, img = self.cap.read()
-        if not ret:
+        try:
+            if self.use_torchcodec:
+                try:
+                    img = self.decoder[self.frame_index]
+                    img = img.permute(1, 2, 0).numpy()
+                    self.frame_index += 1
+                    self.last_frame = img
+                    return img.astype(self.dtype)
+                except Exception as e:
+                    print(f"Torchcodec read error: {e}")
+                    if self.last_frame is not None:
+                        return self.last_frame
+                    raise ValueError("Failed to read image")
+            elif self.cap and self.cap.isOpened():
+                ret, frame = self.cap.read()
+                if ret:
+                    img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    self.last_frame = img
+                    return img.astype(self.dtype)
+                else:
+                    print("Failed to read frame, trying to reopen stream...")
+                    # Try to reopen the stream
+                    stream_url = self.get_stream_url(self.url)
+                    if stream_url:
+                        self.cap = cv2.VideoCapture(stream_url)
+                    if self.last_frame is not None:
+                        return self.last_frame
+                    raise ValueError("Failed to read image")
+            elif self.last_frame is not None:
+                return self.last_frame
+            else:
+                raise ValueError("Failed to read image")
+        except Exception as e:
+            print(f"Error in read_img: {e}")
+            if self.last_frame is not None:
+                return self.last_frame
             raise ValueError("Failed to read image")
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        self.timestamps.append(idx / 30)
-        return img
 
 
 
@@ -708,7 +899,13 @@ def load_dataset(dataset_path):
             return RTMPStreamDataset("dummy://stream")
         
     # Handle other dataset types
-    split_dataset_type = str(dataset_path).split("/")
+    if isinstance(dataset_path, list) and len(dataset_path) == 2:
+        # If dataset_path is a list with 2 items, join them with "/"
+        combined_path = "/".join(dataset_path)
+        split_dataset_type = combined_path.split("/")
+    else:
+        # If dataset_path is a string or any other case
+        split_dataset_type = str(dataset_path).split("/")
     print(f"Dataset type: {split_dataset_type}")
     if "tum" in split_dataset_type:
         return TUMDataset(dataset_path)
@@ -734,11 +931,13 @@ def load_dataset(dataset_path):
         stream_url = config["stream_ip"]["rtmp_ip"]
         key = config["stream_ip"]["key"]
         return RTMPStreamDataset(f"{stream_url}/{key}")
-    if "www.youtube.com" in split_dataset_type:
+    if "youtube" in split_dataset_type:
+        dataset_path = config["multidataset"]["datasets"][0]["path"]
         print("Starting YouTube stream dataset...")
         return YouTubeStreamDataset(dataset_path)
     ext = split_dataset_type[-1].split(".")[-1]
     if ext in ["mp4", "avi", "MOV", "mov"]:
+        dataset_path = config["multidataset"]["datasets"][0]["path"]
         print(f"Loading MP4 dataset from {dataset_path}")
         return MP4Dataset(dataset_path)
     return RGBFiles(dataset_path)

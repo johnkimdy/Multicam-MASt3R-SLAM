@@ -7,16 +7,22 @@ multidataset:
 
     - id: "iphone"
       type: "iphone"
-      path: "your/ip/path"
+      path: "http://143.248.162.114:4747/video"
       camera_id: 1
 
+    - id: "android"
+      type: "android"
+      path: "http://143.248.163.221:8080/video"
+      camera_id: 2
+
+
   urls:
-    iphone_path: "your/ip/path"
-    android_path: "your/ip/path"
+    iphone_path: "http://143.248.162.114:4747/video"
+    android_path: "http://143.248.163.221:8080/video"
 
 
 
 
 # Specify which camera is used as the reference for synchronization.
   reference_camera_id: 0
-  number_of_camera: 2
+  number_of_camera: 3

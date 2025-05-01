@@ -58,7 +58,7 @@ reloc:
   strict: True
 
 stream_ip:
-   iphone_ip: "http://143.248.162.39:4747/video"
+   iphone_ip: "http://143.248.162.182:4747/video"
    android_ip: "http://143.248.163.221:8080/video"
 #   rtmp_ip : "rtmp://pc104709.iptime.org:1935/live"
 #   key : "video"

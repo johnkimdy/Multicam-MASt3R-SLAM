@@ -2,13 +2,13 @@ inherit: "config/base.yaml"
 multidataset:
   datasets:
     - id: "MultiAgentJPG"
-      path: "data/MultiAgentJPG/rt2"
+      path: "/media/research/DataStrorage/johnk/data/MultiAgentJPG/rt2"
       camera_id: 0
     - id: "MultiAgentJPG"
-      path: "data/MultiAgentJPG/rt1"
+      path: "/media/research/DataStrorage/johnk/data/MultiAgentJPG/rt1"
       camera_id: 1
     - id: "MultiAgentJPG"
-      path: "data/MultiAgentJPG/rt3"
+      path: "/media/research/DataStrorage/johnk/data/MultiAgentJPG/rt3"
       camera_id: 2
     
 # Specify which camera is used as the reference for synchronization.
