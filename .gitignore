@@ -138,3 +138,9 @@ screen.yaml
 *.pt
 *.ini
 notebooks/*
+
+# submodules
+lietorch/
+
+# downloaded video data
+data/
