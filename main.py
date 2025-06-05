@@ -118,15 +118,32 @@ def run_backend(cfg, model, states, keyframes, K):
             time.sleep(0.01)
             continue
 
-        # Graph Construction
+        # Graph Construction # LOOK AT ME!!!!
         kf_idx = []
+
+        frame = keyframes[idx] # frame.cam_id
+        print("keyframe cam_id: ", frame.camera_ID)
+        target_cam_id = frame.camera_ID
+
         # k to previous consecutive keyframes
-        n_consec = 1
-        for j in range(min(n_consec, idx)):
-            kf_idx.append(idx - 1 - j)
-        frame = keyframes[idx]
-        retrieval_inds = retrieval_database.update(
-            frame,
+        n_consec = 1 #TODO it was 1
+        for j in range(idx - 1,-1, -1):
+            if keyframes.cam_id[ j] == target_cam_id:
+                # If the camera ID of the keyframe matches the target camera ID, add it to kf_idx
+                 kf_idx.append(j)
+            if len(kf_idx) >= n_consec:
+                break
+        if len(kf_idx) == 0:
+            print("No previous keyframes found for camera ID", target_cam_id)
+
+            
+           
+
+
+
+
+        retrieval_inds = retrieval_database.update( # LOOK AT ME!!!!
+            frame, 
             add_after_query=True,
             k=config["retrieval"]["k"],
             min_thresh=config["retrieval"]["min_thresh"],
@@ -142,8 +159,9 @@ def run_backend(cfg, model, states, keyframes, K):
         kf_idx.discard(idx)  # Remove current kf idx if included
         kf_idx = list(kf_idx)  # convert to list
         frame_idx = [idx] * len(kf_idx)
+        print("Global optimization for kf ", idx, " with ", len(kf_idx), " kfs: ", kf_idx)
         if kf_idx:
-            factor_graph.add_factors(
+            factor_graph.add_factors( #TODO johnk
                 kf_idx, frame_idx, config["local_opt"]["min_match_frac"]
             )
 

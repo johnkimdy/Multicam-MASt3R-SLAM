@@ -50,7 +50,7 @@ local_opt:
   use_cuda: True
 
 retrieval:
-  k: 3
+  k: 3 # might have to increase this in multicam setup
   min_thresh: 5e-3
 
 reloc:
