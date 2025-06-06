@@ -122,25 +122,24 @@ def run_backend(cfg, model, states, keyframes, K):
         kf_idx = []
 
         frame = keyframes[idx] # frame.cam_id
-        print("keyframe cam_id: ", frame.camera_ID)
+        # print("keyframe cam_id: ", frame.camera_ID)
         target_cam_id = frame.camera_ID
 
+        '''
+        Graph construction priority is to add edges to the previous keyframe of the same camera ID, 
+        then the GN solver will optimize the pose with the rest of the graph regardless of camera ID.
+        '''
         # k to previous consecutive keyframes
         n_consec = 1 #TODO it was 1
-        for j in range(idx - 1,-1, -1):
-            if keyframes.cam_id[ j] == target_cam_id:
+        # Find the previous n_consec keyframes with the same camera ID to add it to kf_idx first
+        for j in range(idx - 1, -1, -1):
+            if keyframes.cam_id[j] == target_cam_id:
                 # If the camera ID of the keyframe matches the target camera ID, add it to kf_idx
                  kf_idx.append(j)
             if len(kf_idx) >= n_consec:
                 break
         if len(kf_idx) == 0:
             print("No previous keyframes found for camera ID", target_cam_id)
-
-            
-           
-
-
-
 
         retrieval_inds = retrieval_database.update( # LOOK AT ME!!!!
             frame, 
