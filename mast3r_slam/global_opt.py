@@ -1,5 +1,6 @@
 import lietorch
 import torch
+import numpy as np
 from mast3r_slam.config import config
 from mast3r_slam.frame import SharedKeyframes
 from mast3r_slam.geometry import (
@@ -8,6 +9,108 @@ from mast3r_slam.geometry import (
 from mast3r_slam.mast3r_utils import mast3r_match_symmetric
 import mast3r_slam_backends
 
+
+def compute_dynamic_match_threshold(kf_i_idx, kf_j_idx, keyframes, base_threshold=0.1):
+    """
+    Dynamically adjust matching threshold based on camera ID and pose distance
+    
+    Args:
+        kf_i_idx, kf_j_idx: Keyframe indices
+        keyframes: SharedKeyframes object
+        base_threshold: Base min_match_frac for same camera
+    
+    Returns:
+        Adaptive threshold value
+    """
+
+    # Same camera - use base threshold
+    if keyframes.cam_id[kf_i_idx] == keyframes.cam_id[kf_j_idx]:
+        return base_threshold
+    
+    # Different cameras - compute pose-dependent threshold
+    T_i_data = keyframes.T_WC[kf_i_idx]  # lietorch.Sim3
+    T_j_data = keyframes.T_WC[kf_j_idx]
+
+    # Handle different possible tensor shapes
+    if T_i_data.dim() == 1:
+        T_i_data = T_i_data.unsqueeze(0)  # Add batch dimension
+    if T_j_data.dim() == 1:
+        T_j_data = T_j_data.unsqueeze(0)
+        
+    # Create lietorch.Sim3 objects from the tensor data
+    T_i = lietorch.Sim3(T_i_data)
+    T_j = lietorch.Sim3(T_j_data)
+    
+    # Relative transformation T_ij = T_i^-1 * T_j
+    T_rel = T_i.inv() * T_j
+    
+    # Extract pose components
+    translation = T_rel.translation()  # [3]
+    # rotation_log = T_rel.rotation().log()  # [3] 
+    # scale = T_rel.scale()  # [1]
+    scale_i, scale_j = float(T_i_data.view(-1)[0].item()), float(T_j_data.view(-1)[0].item())
+
+    # For rotation, try different approaches
+    try:
+        # Method 1: Check if quaternion() method exists
+        quat = T_rel.vec().squeeze()[1:5]  # [x, y, z, w] or [w, x, y, z]
+        # Normalize quaternion first
+        quat_norm = quat / torch.norm(quat)
+        # For unit quaternion, rotation angle θ = 2 * arccos(|qw|)
+        qw = quat_norm[-1]  # Assuming [qx, qy, qz, qw] format
+        rot_angle = 2 * torch.acos(torch.clamp(torch.abs(qw), 0, 1)).item()
+        
+    except AttributeError:
+        try:
+            # Method 2: Extract quaternion from raw data
+            # Sim3 data format: [scale, qx, qy, qz, qw, tx, ty, tz]
+            T_rel_data = T_rel.data.squeeze()
+            quat = T_rel_data[1:5]  # [qx, qy, qz, qw]
+            qw = quat[3]  # Real part
+            rot_angle = 2 * torch.acos(torch.clamp(torch.abs(qw), 0, 1)).item()
+            
+        except:
+            # Method 3: Fallback - compute from original poses
+            T_i_data_flat = T_i_data.squeeze()
+            T_j_data_flat = T_j_data.squeeze()
+            
+            # Extract quaternions from original poses
+            qi = T_i_data_flat[1:5]  # [qx, qy, qz, qw]
+            qj = T_j_data_flat[1:5]
+            
+            # Compute relative rotation using quaternion dot product
+            dot_product = torch.abs(torch.dot(qi, qj))
+            rot_angle = 2 * torch.acos(torch.clamp(dot_product, 0, 1)).item()
+    
+    # Compute distance metrics
+    trans_dist = torch.norm(translation).item()
+    # rot_angle = torch.norm(rotation_log).item()  # Radians
+    if scale_i > 0 and scale_j > 0:
+        scale_diff = abs(torch.log(scale_j / scale_i).item())
+    else:
+        scale_diff = 0.0
+
+    # scale_diff = abs(torch.log(scale).item())
+    
+    # Normalized distance (0-1 range)
+    # You may need to tune these normalization factors based on your scene scale
+    trans_norm = min(trans_dist / 5.0, 1.0)  # Normalize by 5m baseline
+    rot_norm = min(rot_angle / (np.pi/2), 1.0)  # Normalize by 90 degrees  
+    scale_norm = min(scale_diff / 0.5, 1.0)  # Normalize by 50% scale change
+    
+    # Combined pose distance [0-1]
+    w_t, w_r, w_s = 0.2, 0.6, 0.2  # Weights for translation, rotation, scale
+    pose_distance = w_t * trans_norm + w_r * rot_norm + w_s * scale_norm
+    
+    # Adaptive threshold formula
+    inter_camera_penalty = 0.05  # Base penalty for different cameras
+    distance_penalty = 0.07 * pose_distance  # Additional penalty based on distance
+    
+    adaptive_threshold = base_threshold + inter_camera_penalty + distance_penalty
+    
+    # Clamp to reasonable range
+    print("Adaptive Threshold: ", min(adaptive_threshold, 0.2))
+    return min(adaptive_threshold, 0.13)  # Max threshold of 60%
 
 class FactorGraph:
     def __init__(self, model, frames: SharedKeyframes, K=None, device="cuda"):
@@ -26,6 +129,8 @@ class FactorGraph:
         self.window_size = self.cfg["window_size"]
 
         self.K = K
+
+    
 
     def add_factors(self, ii, jj, min_match_frac, is_reloc=False):
         kf_ii = [self.frames[idx] for idx in ii]
@@ -68,8 +173,29 @@ class FactorGraph:
         ii_tensor = torch.as_tensor(ii, device=self.device)
         jj_tensor = torch.as_tensor(jj, device=self.device)
 
+        # Dynamic threshold calculation
+        adaptive_thresholds = []
+        for i_idx, j_idx in zip(ii_tensor, jj_tensor):
+            # thresh = compute_dynamic_match_threshold(
+            #     i_idx.item(), j_idx.item(), self.frames, min_match_frac
+            # )
+
+            # Just read the data, don't do any lietorch operations
+            T_i_data = self.frames.T_WC[i_idx.item()]
+            T_j_data = self.frames.T_WC[j_idx.item()]
+
+            # Simple heuristic without lietorch
+            if self.frames.cam_id[i_idx.item()] == self.frames.cam_id[j_idx.item()]:
+                thresh = min_match_frac
+            else:
+                thresh = min_match_frac + 0.03  # Just add penalty for different cameras
+            adaptive_thresholds.append(thresh)
+
+        adaptive_thresholds = torch.tensor(adaptive_thresholds, device=self.device) #FIXME: adaptive min_match_frac seems to be very sensitive. 1E-2 sensitive.
+
         # NOTE: Saying we need both edge directions to be above thrhreshold to accept either
-        invalid_edges = torch.minimum(match_frac_j, match_frac_i) < min_match_frac
+        invalid_edges = torch.minimum(match_frac_j, match_frac_i) < adaptive_thresholds # min_match_frac
+        # invalid_edges = torch.minimum(match_frac_j, match_frac_i) < min_match_frac
         consecutive_edges = ii_tensor == (jj_tensor - 1)
         invalid_edges = (~consecutive_edges) & invalid_edges
 

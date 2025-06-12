@@ -230,11 +230,14 @@ class MultiAgentJPG(MonocularDataset):
             raise ValueError(f"No frame*.jpg files found in {self.dataset_path}")
             
         # Generate timestamps (assuming 30fps)
-        self.timestamps = np.arange(0, len(self.rgb_files)).astype(self.dtype) / 30.0
+        self.timestamps = np.arange(0, len(self.rgb_files)).astype(self.dtype) 
         
         # Defaults for calibration (can be adjusted as needed)
         self.use_calibration = config.get("use_calib", False)
         self.save_results = False
+
+    def get_timestamp(self, idx):
+        return idx
 
 class Webcam(MonocularDataset):
     def __init__(self):

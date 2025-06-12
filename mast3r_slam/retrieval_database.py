@@ -45,7 +45,7 @@ class RetrievalDatabase(Retriever):
         id = self.kf_counter  # Using own counter since otherwise messes up IVF
 
         feat_np = feat[0].cpu().numpy()  # Assumes one frame at a time!
-        print("feat_np shape: ", feat_np.shape,"feat_np: ", feat_np)
+        # print("feat_np shape: ", feat_np.shape,"feat_np: ", feat_np)
         id_np = id * np.ones(feat_np.shape[0], dtype=np.int64)
 
         database_size = self.ivf_builder.ivf.n_images

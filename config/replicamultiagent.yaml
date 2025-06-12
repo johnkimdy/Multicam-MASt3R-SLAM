@@ -11,10 +11,34 @@ multidataset:
     #   # type: "android"
     #   # path: "http://143.248.163.135:8080/video"
     #   path: "/media/research/DataStrorage/johnk/data/MultiAgentJPG/Apart-2/apart_2_part2_reversed/results"
-    #   camera_id: 1
-
-
-
-# Specify which camera is used as the reference for synchronization.
+    #   camera_id: 1+
+    # Specify which camera is used as the reference for synchronization.
   reference_camera_id: 0 #TODO..
   number_of_camera: 1
+camera:
+  H: 680 
+  W: 1200
+  fx: 600.0
+  fy: 600.0
+  cx: 599.5
+  cy: 339.5
+  png_depth_scale: 6553.5 
+  crop_edge: 0
+F_net:
+  input_channel: 141 
+  intermediate_channel: 256
+  output_channel: 128
+density_net:
+  input_channel: 128
+  intermediate_channel: 256
+  output_channel: 1
+radiance_net:
+  input_channel: 128
+  intermediate_channel: 128 
+  output_channel: 3
+
+color_data: '/home/rtx4090/Desktop/tmax/johnk/data/MultiAgentJPG/Apart-2/apart_2_part1/results/frame*.jpg' 
+depth_data: '/home/rtx4090/Desktop/tmax/johnk/data/MultiAgentJPG/Apart-2/apart_2_part1/results/depth*.png'
+traj_path: "/home/rtx4090/Desktop/tmax/johnk/data/MultiAgentJPG/Apart-2/apart_2_part1/traj.txt"
+pose_path: '/home/rtx4090/Desktop/tmax/johnk/data/MultiAgentJPG/Apart-2/apart_2_part1/traj.txt'
+

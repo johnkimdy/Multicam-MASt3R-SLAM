@@ -34,11 +34,10 @@ device = 'cuda:0'
 
 dataloader = dataloader_choice(cfg, device)
 
-gt_pose_list = np
+gt_pose_list = []
 for iter, data in tqdm(enumerate(dataloader)):
     gt_pose = data['pose'].squeeze()
-    print(gt_pose.shape)
-    break
+   
     gt_pose_list.append(gt_pose)
 
 # Convert list of tensors to a numpy array

@@ -2,15 +2,15 @@
 dataset_path="datasets/7-scenes/"
 datasets=(
     chess
-    fire
-    heads
-    office
-    pumpkin
-    redkitchen
-    stairs
+    # fire
+    # heads
+    # office
+    # pumpkin
+    # redkitchen
+    # stairs
 )
 
-no_calib=false
+no_calib=true
 print_only=false
 while [[ "$#" -gt 0 ]]; do
     case "$1" in
@@ -32,7 +32,7 @@ if [ "$print_only" = false ]; then
     for dataset in ${datasets[@]}; do
         dataset_name="$dataset_path""$dataset"/
         if [ "$no_calib" = true ]; then
-            python main.py --dataset $dataset_name --no-viz --save-as 7-scenes/no_calib/$dataset --config config/eval_no_calib.yaml
+            python main.py --no-viz --save-as 7-scenes/no_calib/$dataset --config config/eval_7scenes.yaml
         else
             python main.py --dataset $dataset_name --no-viz --save-as 7-scenes/calib/$dataset --config config/eval_calib.yaml
         fi
@@ -49,3 +49,5 @@ for dataset in ${datasets[@]}; do
     fi
 
 done
+
+#python main.py --no-viz --save-as 7-scenes/no_calib/chess --config config/eval_7scenes.yaml

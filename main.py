@@ -269,10 +269,14 @@ if __name__ == "__main__":
     parser.add_argument("--no-viz", action="store_true")
     parser.add_argument("--calib", default="")
     parser.add_argument("--debug", default="False")
-
+    parser.add_argument("--save-results", default="False", help="Save results to disk")
+    
     
     
     args = parser.parse_args()
+
+        
+    save_results = args.save_results =="True" or args.save_results.lower() == "true"
     debug = args.debug == "True" or args.debug.lower() == "true"
     load_config(args.config)
     print(args.dataset)
@@ -288,7 +292,7 @@ if __name__ == "__main__":
             if ds_conf.get('id') == 'MultiAgentJPG':
                 dataset_identifier = ds_conf.get('path', ds_conf.get('id'))
             else:
-                dataset_identifier = [ds_conf.get('id'), ds_conf.get('path')]
+                dataset_identifier = ds_conf.get('path') #FIXME
         # if 'path' in ds_conf and ds_conf.get('id') == 'MultiAgentJPG':
         #     dataset_identifier = ds_conf.get('path', ds_conf.get('id'))
         else:
@@ -330,7 +334,25 @@ if __name__ == "__main__":
 
     K = None
 
-
+    dataset = datasets.reference
+    if save_results:
+        # Create a directory to save results
+        save_dir, seq_name = eval.prepare_savedir(args, dataset)  
+        traj_file = save_dir / f"{seq_name}.txt"
+        recon_file = save_dir / f"{seq_name}.ply"
+        if traj_file.exists():
+            traj_file.unlink()
+        if recon_file.exists():
+            recon_file.unlink()  
+    # remove the trajectory from the previous run
+    if dataset.save_results:
+        save_dir, seq_name = eval.prepare_savedir(args, dataset)
+        traj_file = save_dir / f"{seq_name}.txt"
+        recon_file = save_dir / f"{seq_name}.ply"
+        if traj_file.exists():
+            traj_file.unlink()
+        if recon_file.exists():
+            recon_file.unlink()
     tracker = FrameTracker(model, keyframes, device)
     last_msg = WindowMsg()
 
@@ -613,9 +635,31 @@ if __name__ == "__main__":
                 time.sleep(0.01)
         i += 1# log time
 
+    if dataset.save_results:
+        save_dir, seq_name = eval.prepare_savedir(args, dataset)
+        eval.save_traj(save_dir, f"{seq_name}.txt", dataset.timestamps, keyframes)
+        # eval.save_reconstruction(
+        #     save_dir,
+        #     f"{seq_name}.ply",
+        #     keyframes,
+        #     last_msg.C_conf_threshold,
+        # )
+        # eval.save_keyframes(
+        #     save_dir / "keyframes" / seq_name, dataset.timestamps, keyframes
+        # )
 
-
-
+    if save_results and not dataset.save_results:
+        save_dir, seq_name = eval.prepare_savedir(args, dataset)
+        eval.save_traj(save_dir, f"{seq_name}.txt", dataset.timestamps, keyframes)
+        # eval.save_reconstruction(
+        #     save_dir,
+        #     f"{seq_name}.ply",
+        #     keyframes,
+        #     last_msg.C_conf_threshold,
+        # )
+        # eval.save_keyframes(
+        #     save_dir / "keyframes" / seq_name, dataset.timestamps, keyframes
+        # )
     print("done")
     backend.join()
     backend_init_nonrefcam.join()
