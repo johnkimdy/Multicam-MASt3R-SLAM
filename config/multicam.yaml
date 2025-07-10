@@ -1,27 +1,37 @@
 inherit: "config/base.yaml"
 multidataset:
   datasets:
-    - id: "webcam"
-      type: "webcam"
-      camera_id: 0
+    # - id: "webcam"
+    #   type: "webcam"
+    #   camera_id: 0
 
     - id: "iphone"
       type: "iphone"
-      path: "http://143.248.162.217:4747/video"
-      camera_id: 1
+      path: "http://143.248.162.62:4747/video"
+      camera_id: 0
 
-    # - id: "android"
-    #   type: "android"
-    #   path: "http://143.248.163.221:8080/video"
-    #   camera_id: 2
+    - id: "android"
+      type: "android"
+      path: "http://143.248.172.64:8080/video"
+      camera_id: 1
 
 
   urls:
-    iphone_path: "http://143.248.162.217:4747/video"
-    android_path: "http://143.248.163.221:8080/video"
+    iphone_path: "http://143.248.162.62:4747/video"
+    android_path: "http://143.248.172.64:8080/video"
 
 
-
+# # RTMP specific options
+# rtmp:
+#   retry_interval: 5  # Seconds between retry attempts
+#   max_retries: 10    # Maximum number of retry attempts
+#   fallback_color: [0, 0, 0]  # Black background for fallback frames
+#   expected_width: 512  # Expected frame width
+#   expected_height: 512  # Expected frame height
+#   crop_factor: 0.55  # Crop to 60% of the center area
+#   buffer_size: 1  # Minimize latency
+#   frame_skip: 2  # Process every 2nd frame when behind
+#   use_threading: true  # Use background thread for capture 
 
 # Specify which camera is used as the reference for synchronization.
   reference_camera_id: 0
