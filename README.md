@@ -1,19 +1,23 @@
-[comment]: <> (# Cognitive-Unburdening Surveillance with Free Viewpoint)
+[comment]: <> (# Cognitive-Unburdening Surveillance: Real-Time 3D Reconstruction for Distributed Spatial Awareness)
 
 <p align="center">
-  <h1 align="center">Cognitive-Unburdening Surveillance with Free Viewpoint</h1>
-  <!-- <p align="center">
-    <a href=""><strong></strong></a>
+  <h1 align="center">Cognitive-Unburdening Surveillance: Real-Time 3D Reconstruction for Distributed Spatial Awareness</h1>
+  <p align="center">
+    <a href="https://www.johnkimdy.com"><strong>John DongYoon Kim</strong></a>
     ·
-    <a href=""><strong></strong></a>
+    <a href="https://github.com/Epicevent"><strong>Rocky Kim</strong></a>
     ·
-    <a href=""><strong></strong></a>
+    <a href=""><strong>Jinwoo Park</strong></a>
+    ·
+    <a href="https://github.com/Alexyodude"><strong>Jihoon Park</strong></a>
+    ·
+    <a href="https://github.com/SeoBeomGeun"><strong>Beomgeun Seo</strong></a>
   </p>
-  <p align="center">(* Equal Contribution)</p> -->
+  <p align="center">(* Equal Contribution)</p>
 
-<!-- [comment]: <> (  <h2 align="center">PAPER</h2>)
-  <h3 align="center"><a href="">Paper</a> | <a href="">Video</a> | <a href="">Project Page</a></h3>
-  <div align="center"></div> -->
+[comment]: <> (  <h2 align="center">PAPER</h2>)
+  <h3 align="center"><a href="http://camps.aptaracorp.com/ACM_PMS/PMS/ACM/UISTADJUNCT25/9/0c655faf-6ffe-11f0-957d-16ffd757ba29/OUT/uistadjunct25-9.html#">Paper</a> | <a href="https://youtu.be/I8CvL6qwVhI?si=SsuTiKvI0tjCW59C">Video</a> | <a href="https://panosynthinfo.netlify.app/">Project Page</a></h3>
+  <div align="center"></div>
 
 <p align="center">
     <img src="./media/teaser3x.gif" alt="teaser3x" width="100%">
@@ -122,3 +126,19 @@ We sincerely thank the developers and contributors of the many open-source proje
 
 # Citation
 If you found this code/work to be useful in your own research, please considering citing the following:
+
+```bibtex
+@inproceedings{kim2025cognitive,
+    title={Cognitive-Unburdening Surveillance: Real-Time {3D} Reconstruction for Distributed Spatial Awareness},
+    author={Kim, Dong Yoon and Kim, Rocky and Park, Jinwoo and Park, Jihoon and Seo, Beomgeun},
+    booktitle={The 38th Annual ACM Symposium on User Interface Software and Technology Adjunct Proceedings},
+    series={UIST Adjunct '25},
+    year={2025},
+    month={September},
+    location={Busan, Republic of Korea},
+    publisher={ACM},
+    address={New York, NY, USA},
+    doi={10.1145/3746058.3758351},
+    isbn={979-8-4007-2036-9/2025/09}
+}
+```
