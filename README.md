@@ -3,9 +3,9 @@
 <p align="center">
   <h1 align="center">Cognitive-Unburdening Surveillance: Real-Time 3D Reconstruction for Distributed Spatial Awareness</h1>
   <p align="center">
-    <a href="https://www.johnkimdy.com"><strong>John DongYoon Kim</strong></a>
+    <a href="https://www.johnkimdy.com"><strong>John DongYoon Kim*</strong></a>
     ·
-    <a href="https://github.com/Epicevent"><strong>Rocky Kim</strong></a>
+    <a href="https://github.com/Epicevent"><strong>Rocky Kim*</strong></a>
     ·
     <a href=""><strong>Jinwoo Park</strong></a>
     ·
