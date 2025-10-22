@@ -1,10 +1,13 @@
 #!/bin/bash
 
-# Source conda
-source /home/rtx4090/anaconda3/etc/profile.d/conda.sh
+# Initialize micromamba
+eval "$(micromamba shell hook --shell bash)"
 
 # Activate conda environment
-conda activate mast3r-slam
+micromamba activate multicam-mast3r-slam
 
 # Run the Python script with config
 python main.py --config config/multicam.yaml
+
+# Keep terminal open
+read -p 'Press Enter to close...'

@@ -7,18 +7,26 @@ multidataset:
 
     - id: "iphone"
       type: "iphone"
-      path: "http://143.248.162.62:4747/video"
+      path: "http://10.249.70.11:4747/video"
       camera_id: 0
 
-    - id: "android"
-      type: "android"
-      path: "http://143.248.172.64:8080/video"
-      camera_id: 1
+    # - id: "android"
+    #   type: "android"
+    #   path: "http://10.249.96.75:8080/video"
+    #   camera_id: 1
+
+    # - id: "android"
+    #   type: "android"
+    #   path: "http://10.249.11.120:8080/video"
+    #   camera_id: 2
+
+    
 
 
-  urls:
-    iphone_path: "http://143.248.162.62:4747/video"
-    android_path: "http://143.248.172.64:8080/video"
+  # urls:
+  #   iphone_path: "http://10.249.70.11:4747/video"
+  #   android_path: "http://10.249.96.75:8080/video"
+  #   android_path: "http://10.249.11.120:8080/video"
 
 
 # # RTMP specific options
@@ -35,4 +43,4 @@ multidataset:
 
 # Specify which camera is used as the reference for synchronization.
   reference_camera_id: 0
-  number_of_camera: 2
+  number_of_camera: 1

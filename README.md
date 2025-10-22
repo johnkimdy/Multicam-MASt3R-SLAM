@@ -73,7 +73,6 @@ wget https://download.europe.naverlabs.com/ComputerVision/MASt3R/MASt3R_ViTLarge
 Connect a realsense camera to the PC and run
 ```
 python main.py --dataset realsense --config config/base.yaml
-
 ```
 ## Running on a multicam (iPhone, Android, Drones, etc..)
 You would need to edit config/multicam.yaml.

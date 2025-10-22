@@ -898,15 +898,33 @@ def load_dataset(dataset_path):
             # Create a dummy dataset that will return black frames
             return RTMPStreamDataset("dummy://stream")
         
-    # Handle other dataset types
+    # Handle [type, url] format from multicam config
     if isinstance(dataset_path, list) and len(dataset_path) == 2:
-        # If dataset_path is a list with 2 items, join them with "/"
-        combined_path = "/".join(dataset_path)
-        split_dataset_type = combined_path.split("/")
+        dataset_type, stream_url = dataset_path[0], dataset_path[1]
+        
+        print(f"Dataset type: {dataset_type}, URL: {stream_url}")
+        
+        # Direct mapping for stream types
+        if dataset_type == "iphone":
+            return iPhone(stream_url)
+        elif dataset_type == "android":
+            return Android(stream_url)
+        elif dataset_type == "webcam":
+            camera_id = int(stream_url) if str(stream_url).isdigit() else 0
+            return Webcam(camera_id)
+        elif dataset_type == "realsense":
+            return RealsenseDataset()
+        else:
+            # For other types, treat as path components
+            combined_path = "/".join(dataset_path)
+            split_dataset_type = combined_path.split("/")
     else:
-        # If dataset_path is a string or any other case
+        # Original string path handling
         split_dataset_type = str(dataset_path).split("/")
+    
     print(f"Dataset type: {split_dataset_type}")
+    
+    # Original dataset type detection (unchanged)
     if "tum" in split_dataset_type:
         return TUMDataset(dataset_path)
     if "euroc" in split_dataset_type:
@@ -920,10 +938,10 @@ def load_dataset(dataset_path):
     if "webcam" in split_dataset_type:
         return Webcam()
     if "iphone" in split_dataset_type:
-        stream_url = config["multidataset"]["urls"]["iphone_path"] if "multidataset" in config and "urls" in config["multidataset"] and "iphone_path" in config["multidataset"]["urls"] else config['stream_ip']['iphone_ip']
+        stream_url = config.get('stream_ip', {}).get('iphone_ip', 'http://localhost:4747/video')
         return iPhone(stream_url)
     if "android" in split_dataset_type:
-        stream_url = config["multidataset"]["urls"]["android_path"] if "multidataset" in config and "urls" in config["multidataset"] and "android_path" in config["multidataset"]["urls"] else config['stream_ip']['android_ip']
+        stream_url = config.get('stream_ip', {}).get('android_ip', 'http://localhost:8080/video')
         return Android(stream_url)
     if "MultiAgentJPG" in split_dataset_type:
         return MultiAgentJPG(dataset_path)
@@ -935,13 +953,14 @@ def load_dataset(dataset_path):
         dataset_path = config["multidataset"]["datasets"][0]["path"]
         print("Starting YouTube stream dataset...")
         return YouTubeStreamDataset(dataset_path)
+    
     ext = split_dataset_type[-1].split(".")[-1]
     if ext in ["mp4", "avi", "MOV", "mov"]:
         dataset_path = config["multidataset"]["datasets"][0]["path"]
         print(f"Loading MP4 dataset from {dataset_path}")
         return MP4Dataset(dataset_path)
+    
     return RGBFiles(dataset_path)
-# 새로운 multi-dataset 로더 함수
 
 
 def load_multi_dataset(dataset_paths, camera_ids=None,reference_canera_id=None):
