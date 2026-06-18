@@ -16,7 +16,7 @@
   <p align="center">(* Equal Contribution)</p>
 
 [comment]: <> (  <h2 align="center">PAPER</h2>)
-  <h3 align="center"><a href="http://camps.aptaracorp.com/ACM_PMS/PMS/ACM/UISTADJUNCT25/9/0c655faf-6ffe-11f0-957d-16ffd757ba29/OUT/uistadjunct25-9.html#">Paper</a> | <a href="https://youtu.be/I8CvL6qwVhI?si=SsuTiKvI0tjCW59C">Video</a> | <a href="https://panosynthinfo.netlify.app/">Project Page</a></h3>
+  <h3 align="center"><a href="https://dl.acm.org/doi/10.1145/3746058.3758351">Paper</a> | <a href="https://youtu.be/I8CvL6qwVhI?si=SsuTiKvI0tjCW59C">Video</a> | <a href="https://panosynthinfo.netlify.app/">Project Page</a></h3>
   <div align="center"></div>
 
 <p align="center">
